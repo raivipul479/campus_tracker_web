@@ -1,6 +1,29 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
 const GPS_API_BASE_URL = import.meta.env.VITE_GPS_API_BASE_URL || '';
 const GPS_API_USERNAME = import.meta.env.VITE_GPS_API_USERNAME || '';
+const AUTH_TOKEN_KEY = 'campus_route_super_admin_token';
+const AUTH_ADMIN_KEY = 'campus_route_super_admin';
+
+export function getStoredSession() {
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  const adminText = localStorage.getItem(AUTH_ADMIN_KEY);
+  if (!token) return null;
+  try {
+    return { token, admin: adminText ? JSON.parse(adminText) : null };
+  } catch {
+    return { token, admin: null };
+  }
+}
+
+export function setStoredSession(session) {
+  localStorage.setItem(AUTH_TOKEN_KEY, session.token);
+  localStorage.setItem(AUTH_ADMIN_KEY, JSON.stringify(session.admin));
+}
+
+export function clearStoredSession() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_ADMIN_KEY);
+}
 
 function queryString(params = {}) {
   const search = new URLSearchParams();
@@ -14,9 +37,11 @@ function queryString(params = {}) {
 }
 
 async function request(path, options = {}) {
+  const session = getStoredSession();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}),
       ...options.headers
     },
     ...options
@@ -38,7 +63,13 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  hasGpsConfig: Boolean(GPS_API_BASE_URL && GPS_API_USERNAME),
   health: () => request('/health'),
+  loginSuperAdmin: credentials => request('/auth/super-admin/login', {
+    method: 'POST',
+    body: JSON.stringify(credentials)
+  }),
+  getCurrentSuperAdmin: () => request('/auth/super-admin/me'),
   getStudents: filters => request(`/students${queryString(filters)}`),
   createStudent: student => request('/students', {
     method: 'POST',
@@ -51,6 +82,18 @@ export const api = {
   deleteStudent: studentId => request(`/students/${studentId}`, {
     method: 'DELETE'
   }),
+  getPayments: filters => request(`/payments${queryString(filters)}`),
+  createPayment: payment => request('/payments', {
+    method: 'POST',
+    body: JSON.stringify(payment)
+  }),
+  getFeeDues: filters => request(`/fee-dues${queryString(filters)}`),
+  generateFeeDues: payload => request('/fee-dues/generate', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
+  getFeeSummary: filters => request(`/fee-dues/summary${queryString(filters)}`),
+  getFeeReport: filters => request(`/fee-dues/report${queryString(filters)}`),
   getDrivers: filters => request(`/drivers${queryString(filters)}`),
   createDriver: driver => request('/drivers', {
     method: 'POST',
