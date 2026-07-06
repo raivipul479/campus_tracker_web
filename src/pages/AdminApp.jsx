@@ -920,7 +920,7 @@ function SuperAdminLogin({ onLogin }) {
     event.preventDefault();
     setStatus({ loading: true, error: '' });
     try {
-      const session = await api.loginSuperAdmin({ email, password });
+      const session = await api.loginSuperAdmin({ email: email.trim(), password: password.trim() });
       setStoredSession(session);
       onLogin(session);
     } catch (error) {
