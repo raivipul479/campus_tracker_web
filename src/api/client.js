@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://campus-tracker-backend.onrender.com/api';
 const GPS_API_BASE_URL = import.meta.env.VITE_GPS_API_BASE_URL || '';
 const GPS_API_USERNAME = import.meta.env.VITE_GPS_API_USERNAME || '';
 const AUTH_TOKEN_KEY = 'campus_route_super_admin_token';
