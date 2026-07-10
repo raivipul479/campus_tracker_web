@@ -135,6 +135,9 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(assignment)
   }),
+  getDriverAssignmentHistory: driverId => request(`/assignments/driver-history/${driverId}`),
+  getVehicleAssignmentHistory: vehicleId => request(`/assignments/vehicle-history/${vehicleId}`),
+  getStudentAssignmentHistory: studentId => request(`/assignments/student-history/${studentId}`),
   getGpsVehicles: async () => {
     if (!GPS_API_BASE_URL || !GPS_API_USERNAME) {
       throw new Error('GPS API is not configured. Set VITE_GPS_API_BASE_URL and VITE_GPS_API_USERNAME.');

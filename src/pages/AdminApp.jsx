@@ -7,7 +7,7 @@ import { Pill } from '../components/Pill.jsx';
 import { useDebouncedEffect } from '../hooks/useDebouncedEffect.js';
 import { campusService as api } from '../services/campusService.js';
 import { clearStoredSession, getStoredSession, setStoredSession } from '../api/client.js';
-import { currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, nextReceiptId, parseAmount, safeText } from '../utils/formatters.js';
+import { currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, parseAmount, safeText } from '../utils/formatters.js';
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 let googleMapsPromise;
@@ -100,6 +100,36 @@ function Sidebar({ active, setActive, open, setOpen, admin, onLogout }) {
 
 const emptyForm = fields => Object.fromEntries(fields.map(field => [field.name, field.defaultValue || '']));
 
+const compareSortValues = (a, b) => {
+  if (a == null && b == null) return 0;
+  if (a == null) return -1;
+  if (b == null) return 1;
+  const numA = Number(a);
+  const numB = Number(b);
+  if (a !== '' && b !== '' && !Number.isNaN(numA) && !Number.isNaN(numB)) {
+    return numA - numB;
+  }
+  return safeText(a).localeCompare(safeText(b), undefined, { sensitivity: 'base', numeric: true });
+};
+
+const formatHistoryDate = value => value
+  ? new Date(value).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  : '-';
+
+function useAssignmentHistory(fetcher, mapRow) {
+  const [history, setHistory] = useState(null);
+  const open = async (row, title, subtitle) => {
+    setHistory({ title, subtitle, rows: [], loading: true, error: '' });
+    try {
+      const rawRows = await fetcher(row);
+      setHistory({ title, subtitle, rows: rawRows.map(mapRow), loading: false, error: '' });
+    } catch (error) {
+      setHistory({ title, subtitle, rows: [], loading: false, error: error.message || 'Unable to load history.' });
+    }
+  };
+  return { history, openHistory: open, closeHistory: () => setHistory(null) };
+}
+
 function SearchableSelect({ field, value, onChange }) {
   const [query, setQuery] = useState(value || '');
   const [open, setOpen] = useState(false);
@@ -145,10 +175,11 @@ function SearchableSelect({ field, value, onChange }) {
   </div>;
 }
 
-function RecordModal({ title, fields, values, setValues, onClose, onSubmit, saving = false, error = '' }) {
+function RecordModal({ title, fields, values, setValues, onClose, onSubmit, saving = false, error = '', deriveValues }) {
   const updateField = (field, rawValue) => {
     const value = field.digitsOnly ? rawValue.replace(/\D/g, '') : rawValue;
-    setValues({...values, [field.name]: value});
+    const nextValues = { ...values, [field.name]: value };
+    setValues(deriveValues ? deriveValues(field.name, nextValues) : nextValues);
   };
   return <div className="modal-backdrop" onClick={onClose}>
     <form className="record-modal" onSubmit={onSubmit} onClick={event => event.stopPropagation()}>
@@ -165,13 +196,14 @@ function RecordModal({ title, fields, values, setValues, onClose, onSubmit, savi
           {field.type === 'select'
             ? field.searchable
               ? <SearchableSelect field={field} value={values[field.name] || ''} onChange={value => updateField(field, value)}/>
-              : <select value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required}>
+              : <select value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required} disabled={field.readOnly}>
                   <option value="">Select</option>
                   {field.options.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
             : field.type === 'textarea'
               ? <textarea value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required}/>
-              : <input type={field.type || 'text'} value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} placeholder={field.placeholder || ''} required={field.required} min={field.min} max={field.max} pattern={field.pattern} maxLength={field.maxLength} inputMode={field.inputMode}/>}
+              : <input type={field.type || 'text'} value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} placeholder={field.placeholder || ''} required={field.required} min={field.min} max={field.max} pattern={field.pattern} maxLength={field.maxLength} inputMode={field.inputMode} readOnly={field.readOnly}/>}
+          {field.hint && <small className="field-hint">{field.hint}</small>}
         </label>)}
       </div>
       {error && <div className="form-error">{error}</div>}
@@ -180,6 +212,36 @@ function RecordModal({ title, fields, values, setValues, onClose, onSubmit, savi
         <button type="submit" className="primary-btn" disabled={saving}><Icon name="check" size={16}/>{saving ? 'Saving...' : 'Save record'}</button>
       </div>
     </form>
+  </div>;
+}
+
+function HistoryModal({ title, subtitle, rows, loading, error, onClose }) {
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="record-modal history-modal" onClick={event => event.stopPropagation()}>
+      <div className="modal-head">
+        <div>
+          <h2>{title}</h2>
+          <p>{subtitle}</p>
+        </div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
+      </div>
+      <div className="history-body">
+        {loading && <div className="empty small-empty">Loading history...</div>}
+        {!loading && error && <div className="form-error">{error}</div>}
+        {!loading && !error && !rows.length && <div className="empty small-empty">No assignment history yet.</div>}
+        {!loading && !error && rows.length > 0 && <table className="history-table">
+          <thead><tr><th>Assigned to</th><th>From</th><th>To</th></tr></thead>
+          <tbody>{rows.map(row => <tr key={row.id}>
+            <td><strong>{row.label}</strong>{row.sublabel && <small className="block-small">{row.sublabel}</small>}</td>
+            <td>{formatHistoryDate(row.from)}</td>
+            <td>{row.to ? formatHistoryDate(row.to) : <Pill tone="green">Present</Pill>}</td>
+          </tr>)}</tbody>
+        </table>}
+      </div>
+      <div className="modal-actions">
+        <button type="button" className="filter-btn" onClick={onClose}>Close</button>
+      </div>
+    </div>
   </div>;
 }
 
@@ -443,10 +505,12 @@ function BaseDataPage({ type, data, columns, subtitle, action, children }) {
   </section>;
 }
 
-function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [] }) {
+function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues }) {
   const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [formValues, setFormValues] = useState(() => emptyForm(fields));
+  const [sort, setSort] = useState({ key: null, dir: 'asc' });
+  const resolveFields = values => typeof fields === 'function' ? fields(values) : fields;
+  const [formValues, setFormValues] = useState(() => emptyForm(resolveFields({})));
   const [editingRow, setEditingRow] = useState(null);
   const [rowActionError, setRowActionError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -455,6 +519,18 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
     () => serverFilters ? data : data.filter(row => Object.values(row || {}).map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())),
     [data, query, serverFilters]
   );
+  const sorted = useMemo(() => {
+    if (!sort.key) return filtered;
+    const copy = [...filtered];
+    copy.sort((a, b) => {
+      const result = compareSortValues(a[sort.key], b[sort.key]);
+      return sort.dir === 'asc' ? result : -result;
+    });
+    return copy;
+  }, [filtered, sort]);
+  const toggleSort = key => setSort(current => current.key === key
+    ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+    : { key, dir: 'asc' });
   useDebouncedEffect(() => {
     if (!serverFilters || !onFiltersChange) return;
     onFiltersChange({ ...filters, q: query });
@@ -463,14 +539,14 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
     onFiltersChange?.({ ...filters, [name]: value });
   };
   const openModal = () => {
-    setFormValues(emptyForm(fields));
+    setFormValues(emptyForm(resolveFields({})));
     setEditingRow(null);
     setFormError('');
     setModalOpen(true);
   };
   const openEditModal = row => {
     setEditingRow(row);
-    setFormValues(Object.fromEntries(fields.map(field => {
+    setFormValues(Object.fromEntries(resolveFields(row).map(field => {
       const value = row[field.name] ?? field.defaultValue ?? '';
       return [field.name, field.name === 'vehicle' && value === 'Unassigned' ? 'Not assigned' : value];
     })));
@@ -479,10 +555,10 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
   };
   const submitForm = async event => {
     event.preventDefault();
-    const record = createRecord ? createRecord(formValues, data) : formValues;
     setSaving(true);
     setFormError('');
     try {
+      const record = createRecord ? await createRecord(formValues, data) : formValues;
       if (editingRow) {
         await onEdit?.(editingRow, record);
       } else {
@@ -525,17 +601,19 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
       </div>
       <div className="table-wrap">
         <table>
-          <thead><tr>{columns.map(column => <th key={column.key}>{column.label}</th>)}<th></th></tr></thead>
-          <tbody>{filtered.map((row, index) => <tr key={row.id || row.regNo || row.name || row.owner}>
+          <thead><tr>{columns.map(column => <th key={column.key} className="sortable-th" onClick={() => toggleSort(column.key)}>
+            {column.label}<span className={`sort-arrow ${sort.key === column.key ? 'active' : ''}`}>{sort.key === column.key && sort.dir === 'desc' ? '▼' : '▲'}</span>
+          </th>)}<th></th></tr></thead>
+          <tbody>{sorted.map((row, index) => <tr key={row.id || row.regNo || row.name || row.owner}>
             {columns.map(column => <td key={column.key}>{column.render ? column.render(row, index) : row[column.key]}</td>)}
-            <td>{onEdit || onDelete ? <div className="row-actions">{onEdit && <button type="button" className="text-action" onClick={() => openEditModal(row)}>Edit</button>}{onDelete && <button type="button" className="text-action danger" onClick={() => deleteRow(row)}>Delete</button>}</div> : <button className="more">...</button>}</td>
+            <td>{onEdit || onDelete || onHistory ? <div className="row-actions">{onHistory && <button type="button" className="text-action" onClick={() => onHistory(row)}>History</button>}{onEdit && <button type="button" className="text-action" onClick={() => openEditModal(row)}>Edit</button>}{onDelete && <button type="button" className="text-action danger" onClick={() => deleteRow(row)}>Delete</button>}</div> : <button className="more">...</button>}</td>
           </tr>)}</tbody>
         </table>
         {!filtered.length && <div className="empty">No matching records found.</div>}
       </div>
-      <div className="table-footer"><span>Showing {filtered.length} of {data.length} records</span><div><button disabled>‹</button><button className="current">1</button><button>2</button><button>›</button></div></div>
+      <div className="table-footer"><span>Showing {sorted.length} of {data.length} records</span><div><button disabled>‹</button><button className="current">1</button><button>2</button><button>›</button></div></div>
     </div>
-    {modalOpen && <RecordModal title={editingRow ? `Edit ${type}` : action} fields={fields} values={formValues} setValues={setFormValues} onClose={() => !saving && setModalOpen(false)} onSubmit={submitForm} saving={saving} error={formError}/>}
+    {modalOpen && <RecordModal title={editingRow ? `Edit ${type}` : action} fields={resolveFields(formValues)} values={formValues} setValues={setFormValues} onClose={() => !saving && setModalOpen(false)} onSubmit={submitForm} saving={saving} error={formError} deriveValues={deriveValues}/>}
   </section>;
 }
 
@@ -575,6 +653,16 @@ const monthlyDueRows = feeDues => feeDues
     method: '-',
     status: due.status
   }));
+const currentMonthDueForStudent = (feeDues, studentId) => studentId
+  ? feeDues.find(item => Number(item.studentId) === studentId && item.month === currentMonthKey()) || null
+  : null;
+const totalDueForStudent = (feeDues, student) => {
+  if (!student) return 0;
+  const studentId = Number(student.studentId ?? student.id);
+  const due = currentMonthDueForStudent(feeDues, studentId);
+  if (due) return Math.max(0, Math.round(Number(due.balance || 0)));
+  return Math.max(0, Math.round(Number(student.monthlyDue || 0)));
+};
 const reportDateFromRow = row => {
   const rawDate = String(row.date || '').trim();
   const parsed = rawDate ? new Date(rawDate) : null;
@@ -604,7 +692,7 @@ const vehicleFields = [
 const routeFields = [
   { name: 'id', label: 'Route code', required: true, placeholder: 'RT-01', pattern: '[A-Za-z0-9][A-Za-z0-9-]*', maxLength: 32 },
   { name: 'name', label: 'Route name', required: true, maxLength: 120 },
-  { name: 'fee', label: 'Route fee', type: 'number', required: true, min: '0', inputMode: 'decimal' },
+  { name: 'fee', label: 'Monthly fee', type: 'number', required: true, min: '0', inputMode: 'decimal' },
   { name: 'vehicle', label: 'Assigned bus', type: 'select', options: ['Not assigned'], defaultValue: 'Not assigned' },
   { name: 'description', label: 'Description', type: 'textarea', full: true, maxLength: 255 }
 ];
@@ -629,7 +717,8 @@ const studentFields = [
 ];
 const paymentFields = [
   { name: 'student', label: 'Student', type: 'select', options: [], required: true },
-  { name: 'plan', label: 'Fee plan', type: 'select', options: ['Monthly', 'Quarterly', 'Half-yearly', 'Annual'], required: true },
+  { name: 'plan', label: 'Fee plan', type: 'select', options: ['Monthly', 'Quarterly', 'Half-yearly', 'Annual'], required: true, defaultValue: 'Monthly' },
+  { name: 'paymentType', label: 'Payment type', type: 'select', options: ['Full payment', 'Partial payment'], required: true, defaultValue: 'Full payment' },
   { name: 'amount', label: 'Amount', required: true, placeholder: '8400', pattern: '[0-9]+', inputMode: 'numeric', digitsOnly: true },
   { name: 'date', label: 'Payment / due date', type: 'date', required: true },
   { name: 'method', label: 'Method', type: 'select', options: ['UPI', 'Card', 'Cash', 'Bank transfer', '-'], required: true },
@@ -646,11 +735,15 @@ const documentFields = [
 
 function VehiclesPage({ vehicles, routes, filters, onFiltersChange, onAdd, onEdit }) {
   const columns = [{key:'id',label:'Vehicle',render:r=><div className="vehicle-cell"><span className={`vehicle-tile ${r.tone}`}><Icon name="bus"/></span><div><strong>{r.id}</strong><small>{r.plate}</small></div></div>},{key:'driver',label:'Driver'},{key:'students',label:'Students'},{key:'speed',label:'Current speed',render:r=>r.speed?`${r.speed} km/h`:'—'},statusCell('status')];
-  return <DataPage type="Vehicles" data={vehicles} columns={columns} subtitle={`${vehicles.length} vehicles registered`} action="Add vehicle" fields={vehicleFields} onAdd={onAdd} onEdit={onEdit} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  const { history, openHistory, closeHistory } = useAssignmentHistory(
+    row => api.getVehicleAssignmentHistory(row.vehicleId),
+    item => ({ id: item.id, label: item.driverName, sublabel: item.route ? `Route: ${item.route}` : undefined, from: item.assignedAt, to: item.unassignedAt })
+  );
+  return <DataPage type="Vehicles" data={vehicles} columns={columns} subtitle={`${vehicles.length} vehicles registered`} action="Add vehicle" fields={vehicleFields} onAdd={onAdd} onEdit={onEdit} onHistory={row => openHistory(row, `${row.id} · Driver history`, 'Drivers assigned to this vehicle over time')} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'status', label:'All statuses', options:['On route','At school','Offline']},
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
-  ]}/>;
+  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
 function RoutesPage({ routes, vehicles, filters, onFiltersChange, onAdd, onEdit, onDelete }) {
@@ -683,14 +776,19 @@ function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAd
     }
     return field;
   });
-  return <DataPage type="Drivers" data={drivers} columns={columns} subtitle={`${drivers.length} drivers registered`} action="Add driver" fields={fields} onAdd={onAdd} onEdit={onEdit} createRecord={values => ({...values, vehicle: values.vehicle === 'Not assigned' ? 'Unassigned' : values.vehicle, route: values.route === 'Not assigned' ? '' : values.route, initials: initialsFor(values.name)})} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  const { history, openHistory, closeHistory } = useAssignmentHistory(
+    row => api.getDriverAssignmentHistory(row.driverId),
+    item => ({ id: item.id, label: item.vehicleCode, sublabel: item.route ? `Route: ${item.route}` : undefined, from: item.assignedAt, to: item.unassignedAt })
+  );
+  return <DataPage type="Drivers" data={drivers} columns={columns} subtitle={`${drivers.length} drivers registered`} action="Add driver" fields={fields} onAdd={onAdd} onEdit={onEdit} onHistory={row => openHistory(row, `${row.name} · Vehicle history`, 'Vehicles this driver has been assigned to over time')} createRecord={values => ({...values, vehicle: values.vehicle === 'Not assigned' ? 'Unassigned' : values.vehicle, route: values.route === 'Not assigned' ? '' : values.route, initials: initialsFor(values.name)})} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'status', label:'All statuses', options:['On duty','Available','Off duty','At school']},
     {name:'docs', label:'All docs', options:['Verified','ExpiringSoon','Pending','Expired']},
     {name:'vehicleId', label:'All buses', options:vehicles.map(vehicle => ({value: vehicle.id, label: vehicle.id}))}
-  ]}/>;
+  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
-function StudentsPage({ students, routes, filters, onFiltersChange, onAdd, onEdit, onDelete }) {
+function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete }) {
+  const studentRows = students.map(student => ({ ...student, totalDue: totalDueForStudent(feeDues, student) }));
   const columns = [
     {key:'f',label:'Sr. No.',render:r=><strong>{r.f}</strong>},
     {key:'regNo',label:'Reg. No.'},
@@ -700,6 +798,7 @@ function StudentsPage({ students, routes, filters, onFiltersChange, onAdd, onEdi
     {key:'tagNo',label:'Tag No.',render:r=><Pill tone="blue">{r.tagNo}</Pill>},
     {key:'route',label:'Route',render:r=>dash(r.route)},
     {key:'monthlyDue',label:'Monthly due',render:r=><strong>{formatCurrency(r.monthlyDue)}</strong>},
+    {key:'totalDue',label:'Total due',render:r=><strong>{formatCurrency(r.totalDue)}</strong>},
     {key:'area',label:'Area'},
     {key:'phone',label:'Phone Number'},
     {key:'secondaryPhone',label:'Secondary contact',render:r=>dash(r.secondaryPhone)}
@@ -708,10 +807,20 @@ function StudentsPage({ students, routes, filters, onFiltersChange, onAdd, onEdi
     ? {...field, options: routes.map(route => route.id)}
     : field
   );
-  return <DataPage type="Students" data={students} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  const { history, openHistory, closeHistory } = useAssignmentHistory(
+    row => api.getStudentAssignmentHistory(row.studentId),
+    item => ({
+      id: item.id,
+      label: item.kind === 'route' ? `${item.routeCode} · ${item.routeName}` : (item.vehicleCode || 'Vehicle'),
+      sublabel: item.kind === 'route' ? (item.vehicleCode ? `Vehicle: ${item.vehicleCode}` : undefined) : 'Legacy direct vehicle assignment',
+      from: item.assignedAt,
+      to: item.unassignedAt
+    })
+  );
+  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
-  ]}/>;
+  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
 function FeeReport({ rows, students, onBack }) {
@@ -779,6 +888,11 @@ function FeeReport({ rows, students, onBack }) {
   </section>;
 }
 
+const studentIdFromSelection = selection => {
+  const match = String(selection || '').match(/#(\d+)$/);
+  return match ? Number(match[1]) : null;
+};
+
 function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues }) {
   const [showReport, setShowReport] = useState(false);
   const dues = monthlyDueRows(feeDues);
@@ -787,24 +901,76 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues }) {
   const totalBilled = feeDues.reduce((sum, due) => sum + Number(due.billed || due.baseAmount || 0), 0);
   const totalPending = dues.reduce((sum, row) => sum + parseAmount(row.amount), 0);
   const totalCollected = feeDues.reduce((sum, due) => sum + Number(due.paidAmount || 0), 0);
-  const fields = paymentFields.map(field => field.name === 'student'
-    ? {...field, searchable: true, options: students.map(student => `${student.name} #${student.studentId || student.id}`)}
-    : field
-  );
+  const findStudent = studentId => studentId
+    ? students.find(item => Number(item.studentId || item.id) === studentId) || null
+    : null;
+  const isMonthlyPlan = values => String(values.plan || 'Monthly').toLowerCase() === 'monthly';
+  const dueAmountFor = values => {
+    if (!isMonthlyPlan(values)) return 0;
+    return totalDueForStudent(feeDues, findStudent(studentIdFromSelection(values.student)));
+  };
+  const fields = values => paymentFields.map(field => {
+    if (field.name === 'student') {
+      return {...field, searchable: true, options: students.map(student => `${student.name} #${student.studentId || student.id}`)};
+    }
+    if (field.name === 'amount') {
+      const totalDue = dueAmountFor(values);
+      const isFullPayment = (values.paymentType || 'Full payment') === 'Full payment';
+      return {
+        ...field,
+        readOnly: totalDue > 0 && isFullPayment,
+        hint: totalDue > 0
+          ? `Total due: ${formatCurrency(totalDue)}${isFullPayment ? '' : ' — enter an amount less than the due'}`
+          : undefined
+      };
+    }
+    return field;
+  });
+  const deriveValues = (changedField, values) => {
+    if (!['student', 'paymentType', 'plan'].includes(changedField)) return values;
+    const totalDue = dueAmountFor(values);
+    if (!totalDue) return values;
+    const isFullPayment = (values.paymentType || 'Full payment') === 'Full payment';
+    const currentAmount = Number(values.amount || 0);
+    if (isFullPayment || changedField === 'student' || !currentAmount || currentAmount > totalDue) {
+      return { ...values, amount: String(totalDue) };
+    }
+    return values;
+  };
   if (showReport) {
     return <FeeReport rows={rows} students={students} onBack={() => setShowReport(false)}/>;
   }
 
   const dueSummary = <section className="stats-grid compact"><StatCard label="Monthly billed" value={formatCurrency(totalBilled)} change={currentMonthLabel()} detail="route fees" icon="money" tone="blue"/><StatCard label="Pending dues" value={formatCurrency(totalPending)} change={`${dues.length}`} detail="students" icon="clock" tone="amber"/><StatCard label="Collected" value={formatCurrency(totalCollected)} change={`${settledPayments.length}`} detail="receipts" icon="check" tone="green"/><StatCard label="Settled" value={feeDues.filter(due => due.status === 'Paid' || due.status === 'Waived').length} change="Ledger" detail="students" icon="check" tone="green"/></section>;
   const columns = [{key:'id',label:'Receipt ID',render:r=><strong>{r.id}</strong>},{key:'student',label:'Student'},{key:'plan',label:'Fee plan'},{key:'amount',label:'Amount',render:r=><strong>{r.amount}</strong>},{key:'date',label:'Payment / due date'},{key:'method',label:'Method'},statusCell('status')];
-  return <DataPage type="Payment history" data={rows} columns={columns} subtitle={`${dues.length} monthly route fee dues pending after received payments`} action="Record payment" fields={fields} onAdd={onAdd} createRecord={(values, rows) => {
-    const match = String(values.student || '').match(/#(\d+)$/);
-    const studentId = match ? Number(match[1]) : null;
-    const student = students.find(item => Number(item.studentId || item.id) === studentId);
-    const due = feeDues.find(item => Number(item.studentId) === studentId && item.month === currentMonthKey() && Number(item.balance || 0) > 0);
+  return <DataPage type="Payment history" data={rows} columns={columns} subtitle={`${dues.length} monthly route fee dues pending after received payments`} action="Record payment" fields={fields} deriveValues={deriveValues} onAdd={onAdd} createRecord={async values => {
+    const studentId = studentIdFromSelection(values.student);
+    const student = findStudent(studentId);
+    const amount = Number(values.amount || 0);
+    if (!amount || amount <= 0) throw new Error('Enter a valid payment amount.');
+
+    let due = isMonthlyPlan(values) ? currentMonthDueForStudent(feeDues, studentId) : null;
+    if (isMonthlyPlan(values) && !due && Number(student?.monthlyDue || 0) > 0) {
+      // No fee due has been generated for this student/month yet — generate it now so the
+      // payment can be linked to a real due and its balance reconciled correctly.
+      await api.generateFeeDues({ month: currentMonthKey() });
+      const refreshed = await api.getFeeDues({ month: currentMonthKey(), studentId });
+      due = refreshed.find(item => Number(item.studentId) === studentId) || null;
+    }
+
+    if (due && Number(due.balance || 0) > 0) {
+      const balance = Math.round(Number(due.balance));
+      const isFullPayment = (values.paymentType || 'Full payment') === 'Full payment';
+      if (isFullPayment && amount !== balance) {
+        throw new Error(`Full payment amount must equal the total due (${formatCurrency(balance)}).`);
+      }
+      if (!isFullPayment && amount >= balance) {
+        throw new Error(`Partial payment must be less than the total due (${formatCurrency(balance)}).`);
+      }
+    }
+    const { paymentType, ...rest } = values;
     return {
-      id: nextReceiptId(rows),
-      ...values,
+      ...rest,
       student: student?.name || values.student,
       studentId,
       dueId: due?.dueId || due?.id || null
@@ -1144,7 +1310,7 @@ export default function AdminApp() {
   if(active==='Routes') content=<RoutesPage routes={routes} vehicles={vehicles} filters={routeFilters} onFiltersChange={setRouteFilters} onAdd={handleAddRoute} onEdit={handleEditRoute} onDelete={handleDeleteRoute}/>;
   if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle}/>;
   if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver}/>;
-  if(active==='Students') content=<StudentsPage students={students} routes={routes} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent}/>;
+  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent}/>;
   if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }}/>;
   if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
   if(active==='Notifications') content=<NotificationsPage/>;

@@ -10,8 +10,6 @@ export const initialsFor = name => {
   return text.split(' ').filter(Boolean).map(part => part[0]).join('').slice(0, 2).toUpperCase();
 };
 
-export const nextReceiptId = rows => `RF-${String(82411 + rows.length).padStart(5, '0')}`;
-
 export const currentMonthLabel = () => new Date().toLocaleString('en-IN', { month: 'short', year: 'numeric' });
 
 export const currentMonthKey = () => `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
