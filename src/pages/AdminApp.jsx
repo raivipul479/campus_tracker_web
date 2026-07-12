@@ -192,7 +192,7 @@ function RecordModal({ title, fields, values, setValues, onClose, onSubmit, savi
       </div>
       <div className="form-grid">
         {fields.map(field => <label key={field.name} className={field.full ? 'full' : ''}>
-          <span>{field.label}</span>
+          <span>{field.label}{field.required && <em className="required-star"> *</em>}</span>
           {field.type === 'select'
             ? field.searchable
               ? <SearchableSelect field={field} value={values[field.name] || ''} onChange={value => updateField(field, value)}/>
@@ -201,15 +201,15 @@ function RecordModal({ title, fields, values, setValues, onClose, onSubmit, savi
                   {field.options.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
             : field.type === 'textarea'
-              ? <textarea value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required}/>
-              : <input type={field.type || 'text'} value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} placeholder={field.placeholder || ''} required={field.required} min={field.min} max={field.max} pattern={field.pattern} maxLength={field.maxLength} inputMode={field.inputMode} readOnly={field.readOnly}/>}
+              ? <textarea value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required} minLength={field.minLength} maxLength={field.maxLength} title={field.title}/>
+              : <input type={field.type || 'text'} value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} placeholder={field.placeholder || ''} required={field.required} min={field.min} max={field.max} step={field.step} pattern={field.pattern} minLength={field.minLength} maxLength={field.maxLength} inputMode={field.inputMode} readOnly={field.readOnly} title={field.title}/>}
           {field.hint && <small className="field-hint">{field.hint}</small>}
         </label>)}
       </div>
       {error && <div className="form-error">{error}</div>}
       <div className="modal-actions">
         <button type="button" className="filter-btn" onClick={onClose} disabled={saving}>Cancel</button>
-        <button type="submit" className="primary-btn" disabled={saving}><Icon name="check" size={16}/>{saving ? 'Saving...' : 'Save record'}</button>
+        <button type="submit" className="primary-btn" disabled={saving}>{saving ? <span className="spinner"/> : <Icon name="check" size={16}/>}{saving ? 'Saving...' : 'Save record'}</button>
       </div>
     </form>
   </div>;
@@ -226,7 +226,7 @@ function HistoryModal({ title, subtitle, rows, loading, error, onClose }) {
         <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
       </div>
       <div className="history-body">
-        {loading && <div className="empty small-empty">Loading history...</div>}
+        {loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading history...</div>}
         {!loading && error && <div className="form-error">{error}</div>}
         {!loading && !error && !rows.length && <div className="empty small-empty">No assignment history yet.</div>}
         {!loading && !error && rows.length > 0 && <table className="history-table">
@@ -240,6 +240,96 @@ function HistoryModal({ title, subtitle, rows, loading, error, onClose }) {
       </div>
       <div className="modal-actions">
         <button type="button" className="filter-btn" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function BulkAssignModal({ students, routes, onClose, onSave }) {
+  const [query, setQuery] = useState('');
+  // Only user-changed selections are stored here. The displayed value is derived
+  // fresh on every render (defaulting to the student's current routeId) so it can
+  // never get stuck showing stale data if students/routes finish loading after
+  // this modal first mounts.
+  const [overrides, setOverrides] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const studentKey = student => student.studentId ?? student.id;
+  const valueFor = student => {
+    const id = studentKey(student);
+    if (Object.prototype.hasOwnProperty.call(overrides, id)) return overrides[id];
+    return student.routeId ? String(student.routeId) : '';
+  };
+  const setSelection = (studentId, routeId) => setOverrides(current => ({ ...current, [studentId]: routeId }));
+
+  const visibleStudents = students.filter(student =>
+    [student.name, student.area, student.phone, student.class].map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())
+  );
+
+  const submit = async () => {
+    const assignments = students
+      .map(student => {
+        const id = studentKey(student);
+        const selected = valueFor(student);
+        return selected && Number(selected) !== Number(student.routeId || 0)
+          ? { studentId: Number(id), routeId: Number(selected) }
+          : null;
+      })
+      .filter(Boolean);
+
+    if (!assignments.length) {
+      setError('Choose at least one changed route before saving.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+    try {
+      await onSave(assignments);
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Unable to bulk assign routes.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="record-modal bulk-assign-modal" onClick={event => event.stopPropagation()}>
+      <div className="modal-head">
+        <div>
+          <h2>Bulk assign routes</h2>
+          <p>Pick a route for each student, then save to apply every change at once.</p>
+        </div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
+      </div>
+      <label className="table-search bulk-assign-search"><Icon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search students..."/></label>
+      <div className="bulk-assign-body">
+        <div className="bulk-assign-table" role="table">
+          <div className="bulk-assign-row bulk-assign-head" role="row">
+            <span>Student</span><span>Class</span><span>Area</span><span>Phone</span><span>Route</span>
+          </div>
+          {visibleStudents.map(student => {
+            const id = studentKey(student);
+            return <div className="bulk-assign-row" role="row" key={id}>
+              <span title={student.name}><strong>{student.name}</strong></span>
+              <span title={student.class}>{student.class}</span>
+              <span title={student.area}>{student.area}</span>
+              <span title={student.phone}>{student.phone}</span>
+              <span><select value={valueFor(student)} onChange={event => setSelection(id, event.target.value)}>
+                <option value="">Not assigned</option>
+                {routes.map(route => <option key={route.routeId} value={route.routeId}>{route.id} · {route.name}</option>)}
+              </select></span>
+            </div>;
+          })}
+        </div>
+        {!visibleStudents.length && <div className="empty small-empty">No matching students.</div>}
+      </div>
+      {error && <div className="form-error">{error}</div>}
+      <div className="modal-actions">
+        <button type="button" className="filter-btn" onClick={onClose} disabled={saving}>Cancel</button>
+        <button type="button" className="primary-btn" onClick={submit} disabled={saving}>{saving ? <span className="spinner"/> : <Icon name="check" size={16}/>}{saving ? 'Saving...' : 'Save assignments'}</button>
       </div>
     </div>
   </div>;
@@ -505,7 +595,7 @@ function BaseDataPage({ type, data, columns, subtitle, action, children }) {
   </section>;
 }
 
-function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues }) {
+function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues, loading = false }) {
   const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [sort, setSort] = useState({ key: null, dir: 'asc' });
@@ -515,6 +605,8 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
   const [rowActionError, setRowActionError] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [deletingId, setDeletingId] = useState(null);
+  const [runningAction, setRunningAction] = useState('');
   const filtered = useMemo(
     () => serverFilters ? data : data.filter(row => Object.values(row || {}).map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())),
     [data, query, serverFilters]
@@ -574,11 +666,23 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
   };
   const deleteRow = async row => {
     if (!onDelete || !window.confirm(`Delete ${row.name || row.id || 'this record'}?`)) return;
+    const rowId = row.id || row.regNo || row.name || row.owner;
     setRowActionError('');
+    setDeletingId(rowId);
     try {
       await onDelete(row);
     } catch (error) {
       setRowActionError(error.message || 'Unable to delete record.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+  const runExtraAction = async item => {
+    setRunningAction(item.label);
+    try {
+      await item.onClick();
+    } finally {
+      setRunningAction('');
     }
   };
 
@@ -589,14 +693,14 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
       <div className="table-toolbar">
         <div><h2>{type}</h2><p>{subtitle}</p></div>
         <div className="toolbar-actions">
-          <label className="table-search"><Icon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${type.toLowerCase()}...`}/></label>
+          <label className="table-search"><Icon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${type.toLowerCase()}...`}/>{loading && <span className="spinner spinner-sm table-search-spinner"/>}</label>
           {filterFields.map(field => <select key={field.name} className="filter-select" value={filters[field.name] || 'all'} onChange={event => setFilter(field.name, event.target.value)}>
             <option value="all">{field.label}</option>
             {field.options.map(option => <option key={option.value ?? option} value={option.value ?? option}>{option.label ?? option}</option>)}
           </select>)}
-          {extraActions.map(item => <button key={item.label} type="button" className="filter-btn report-open-btn" onClick={item.onClick}><Icon name={item.icon || 'file'} size={16}/>{item.label}</button>)}
+          {extraActions.map(item => <button key={item.label} type="button" className="filter-btn report-open-btn" onClick={() => runExtraAction(item)} disabled={runningAction === item.label}>{runningAction === item.label ? <span className="spinner spinner-sm"/> : <Icon name={item.icon || 'file'} size={16}/>}{item.label}</button>)}
           <button className="primary-btn" onClick={openModal}><Icon name="plus" size={16}/>{action}</button>
-          {secondaryAction && <button type="button" className="filter-btn report-open-btn" onClick={secondaryAction.onClick}><Icon name={secondaryAction.icon || 'file'} size={16}/>{secondaryAction.label}</button>}
+          {secondaryAction && <button type="button" className="filter-btn report-open-btn" onClick={() => runExtraAction(secondaryAction)} disabled={runningAction === secondaryAction.label}>{runningAction === secondaryAction.label ? <span className="spinner spinner-sm"/> : <Icon name={secondaryAction.icon || 'file'} size={16}/>}{secondaryAction.label}</button>}
         </div>
       </div>
       <div className="table-wrap">
@@ -604,10 +708,14 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
           <thead><tr>{columns.map(column => <th key={column.key} className="sortable-th" onClick={() => toggleSort(column.key)}>
             {column.label}<span className={`sort-arrow ${sort.key === column.key ? 'active' : ''}`}>{sort.key === column.key && sort.dir === 'desc' ? '▼' : '▲'}</span>
           </th>)}<th></th></tr></thead>
-          <tbody>{sorted.map((row, index) => <tr key={row.id || row.regNo || row.name || row.owner}>
-            {columns.map(column => <td key={column.key}>{column.render ? column.render(row, index) : row[column.key]}</td>)}
-            <td>{onEdit || onDelete || onHistory ? <div className="row-actions">{onHistory && <button type="button" className="text-action" onClick={() => onHistory(row)}>History</button>}{onEdit && <button type="button" className="text-action" onClick={() => openEditModal(row)}>Edit</button>}{onDelete && <button type="button" className="text-action danger" onClick={() => deleteRow(row)}>Delete</button>}</div> : <button className="more">...</button>}</td>
-          </tr>)}</tbody>
+          <tbody>{sorted.map((row, index) => {
+            const rowId = row.id || row.regNo || row.name || row.owner;
+            const isDeleting = deletingId === rowId;
+            return <tr key={rowId}>
+              {columns.map(column => <td key={column.key}>{column.render ? column.render(row, index) : row[column.key]}</td>)}
+              <td>{onEdit || onDelete || onHistory ? <div className="row-actions">{onHistory && <button type="button" className="text-action" onClick={() => onHistory(row)} disabled={isDeleting}>History</button>}{onEdit && <button type="button" className="text-action" onClick={() => openEditModal(row)} disabled={isDeleting}>Edit</button>}{onDelete && <button type="button" className="text-action danger" onClick={() => deleteRow(row)} disabled={isDeleting}>{isDeleting ? <span className="spinner spinner-sm"/> : 'Delete'}</button>}</div> : <button className="more">...</button>}</td>
+            </tr>;
+          })}</tbody>
         </table>
         {!filtered.length && <div className="empty">No matching records found.</div>}
       </div>
@@ -663,6 +771,19 @@ const totalDueForStudent = (feeDues, student) => {
   if (due) return Math.max(0, Math.round(Number(due.balance || 0)));
   return Math.max(0, Math.round(Number(student.monthlyDue || 0)));
 };
+
+const VEHICLE_COMPLIANCE_DATES = ['insuranceExpiry', 'fitnessExpiry', 'pucExpiry', 'permitExpiry'];
+const complianceStatusForVehicle = vehicle => {
+  const dates = VEHICLE_COMPLIANCE_DATES.map(key => vehicle[key]);
+  if (dates.some(date => !date)) return 'Incomplete';
+  const today = new Date();
+  const soonThreshold = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const parsed = dates.map(date => new Date(date));
+  if (parsed.some(date => date < today)) return 'Expired';
+  if (parsed.some(date => date <= soonThreshold)) return 'Expiring soon';
+  return 'Valid';
+};
+const complianceTone = status => ({ Expired: 'overdue', 'Expiring soon': 'amber', Valid: 'green', Incomplete: 'gray' })[status] || 'gray';
 const reportDateFromRow = row => {
   const rawDate = String(row.date || '').trim();
   const parsed = rawDate ? new Date(rawDate) : null;
@@ -685,68 +806,77 @@ const reportDateFromRow = row => {
 const reportTypeForRow = row => safeText(row.id).startsWith('DUE-') ? 'Generated due' : row.plan || 'Payment';
 
 const vehicleFields = [
-  { name: 'id', label: 'Vehicle ID', required: true, placeholder: 'BUS-12', pattern: '[A-Za-z0-9][A-Za-z0-9-]*', maxLength: 32 },
-  { name: 'plate', label: 'Registration number', required: true, maxLength: 64 },
-  { name: 'driver', label: 'Existing driver name', defaultValue: 'Unassigned' }
+  { name: 'id', label: 'Vehicle ID', required: true, placeholder: 'BUS-12', pattern: '[A-Za-z0-9][A-Za-z0-9-]*', minLength: 3, maxLength: 32, title: 'Start with a letter or number; letters, numbers, and hyphens only' },
+  { name: 'plate', label: 'Registration number', required: true, minLength: 3, maxLength: 64 },
+  { name: 'vehicleType', label: 'Vehicle type', type: 'select', options: ['Bus', 'Van', 'Mini Bus'], required: true, defaultValue: 'Bus' },
+  { name: 'fuelType', label: 'Fuel type', type: 'select', options: ['Diesel', 'Petrol', 'CNG', 'Electric'], required: true, defaultValue: 'Diesel' },
+  { name: 'seatingCapacity', label: 'Seating capacity', type: 'number', required: true, min: '1', max: '100', inputMode: 'numeric' },
+  { name: 'chassisNumber', label: 'Chassis number', required: true, maxLength: 64 },
+  { name: 'insuranceExpiry', label: 'Insurance expiry', type: 'date' },
+  { name: 'fitnessExpiry', label: 'Fitness certificate expiry', type: 'date' },
+  { name: 'pucExpiry', label: 'PUC (pollution) expiry', type: 'date' },
+  { name: 'permitExpiry', label: 'Permit expiry', type: 'date' },
+  { name: 'driver', label: 'Existing driver name', defaultValue: 'Unassigned', readOnly: true }
 ];
 const routeFields = [
-  { name: 'id', label: 'Route code', required: true, placeholder: 'RT-01', pattern: '[A-Za-z0-9][A-Za-z0-9-]*', maxLength: 32 },
-  { name: 'name', label: 'Route name', required: true, maxLength: 120 },
-  { name: 'fee', label: 'Monthly fee', type: 'number', required: true, min: '0', inputMode: 'decimal' },
+  { name: 'id', label: 'Route code', required: true, placeholder: 'RT-01', pattern: '[A-Za-z0-9][A-Za-z0-9-]*', minLength: 2, maxLength: 32, title: 'Start with a letter or number; letters, numbers, and hyphens only' },
+  { name: 'name', label: 'Route name', required: true, minLength: 2, maxLength: 120 },
+  { name: 'fee', label: 'Monthly fee', type: 'number', required: true, min: '0', max: '99999999.99', step: '0.01', inputMode: 'decimal' },
   { name: 'vehicle', label: 'Assigned bus', type: 'select', options: ['Not assigned'], defaultValue: 'Not assigned' },
   { name: 'description', label: 'Description', type: 'textarea', full: true, maxLength: 255 }
 ];
 const driverFields = [
-  { name: 'name', label: 'Driver name', required: true, maxLength: 160 },
-  { name: 'phone', label: 'Phone number', required: true, pattern: '[0-9+() -]{10,20}' },
+  { name: 'name', label: 'Driver name', required: true, minLength: 2, maxLength: 160 },
+  { name: 'phone', label: 'Phone number', required: true, pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
   { name: 'licenseNumber', label: 'License number', maxLength: 80 },
   { name: 'vehicle', label: 'Vehicle', type: 'select', options: ['Not assigned'], defaultValue: 'Not assigned' },
   { name: 'route', label: 'Assigned route', type: 'select', options: [], defaultValue: 'Not assigned' }
 ];
 const studentFields = [
   { name: 'f', label: 'Sr. No.', required: true, maxLength: 32 },
-  { name: 'regNo', label: 'Reg. No.', required: true, maxLength: 64 },
-  { name: 'name', label: 'Student name', required: true, maxLength: 160 },
+  { name: 'regNo', label: 'Reg. No.', required: true, minLength: 3, maxLength: 64 },
+  { name: 'name', label: 'Student name', required: true, minLength: 2, maxLength: 160 },
   { name: 'class', label: 'Class', required: true, maxLength: 80 },
-  { name: 'kms', label: 'Kms', type: 'number', min: '0', max: '500', inputMode: 'numeric' },
+  { name: 'kms', label: 'Kms', type: 'number', min: '0', max: '500', step: '0.01', inputMode: 'decimal' },
   { name: 'tagNo', label: 'Tag No.', required: true, placeholder: 'T-A', maxLength: 32 },
-  { name: 'area', label: 'Area', required: true, maxLength: 180 },
-  { name: 'phone', label: 'Phone number', required: true, pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true },
-  { name: 'secondaryPhone', label: 'Secondary contact number', pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true },
+  { name: 'area', label: 'Area', required: true, minLength: 2, maxLength: 180 },
+  { name: 'phone', label: 'Phone number', required: true, pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
+  { name: 'secondaryPhone', label: 'Secondary contact number', pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
   { name: 'route', label: 'Route', type: 'select', options: [] }
 ];
 const paymentFields = [
   { name: 'student', label: 'Student', type: 'select', options: [], required: true },
   { name: 'plan', label: 'Fee plan', type: 'select', options: ['Monthly', 'Quarterly', 'Half-yearly', 'Annual'], required: true, defaultValue: 'Monthly' },
   { name: 'paymentType', label: 'Payment type', type: 'select', options: ['Full payment', 'Partial payment'], required: true, defaultValue: 'Full payment' },
-  { name: 'amount', label: 'Amount', required: true, placeholder: '8400', pattern: '[0-9]+', inputMode: 'numeric', digitsOnly: true },
+  { name: 'amount', label: 'Amount', required: true, placeholder: '8400', pattern: '[0-9]+', inputMode: 'numeric', digitsOnly: true, title: 'Enter a whole number amount' },
   { name: 'date', label: 'Payment / due date', type: 'date', required: true },
   { name: 'method', label: 'Method', type: 'select', options: ['UPI', 'Card', 'Cash', 'Bank transfer', '-'], required: true },
   { name: 'status', label: 'Status', type: 'select', options: ['Paid', 'Collected', 'Pending', 'Overdue'], required: true }
 ];
 const documentFields = [
-  { name: 'owner', label: 'Owner', required: true },
+  { name: 'owner', label: 'Owner', required: true, minLength: 2, maxLength: 160 },
   { name: 'kind', label: 'Owner type', type: 'select', options: ['Driver', 'Vehicle', 'Student'], required: true },
-  { name: 'type', label: 'Document type', required: true },
-  { name: 'number', label: 'Document number', required: true },
-  { name: 'expiry', label: 'Expiry date', required: true },
+  { name: 'type', label: 'Document type', required: true, minLength: 2, maxLength: 80 },
+  { name: 'number', label: 'Document number', required: true, minLength: 2, maxLength: 64 },
+  { name: 'expiry', label: 'Expiry date', type: 'date', required: true },
   { name: 'status', label: 'Status', type: 'select', options: ['Verified', 'Expiring', 'Pending'], required: true }
 ];
 
-function VehiclesPage({ vehicles, routes, filters, onFiltersChange, onAdd, onEdit }) {
-  const columns = [{key:'id',label:'Vehicle',render:r=><div className="vehicle-cell"><span className={`vehicle-tile ${r.tone}`}><Icon name="bus"/></span><div><strong>{r.id}</strong><small>{r.plate}</small></div></div>},{key:'driver',label:'Driver'},{key:'students',label:'Students'},{key:'speed',label:'Current speed',render:r=>r.speed?`${r.speed} km/h`:'—'},statusCell('status')];
+function VehiclesPage({ vehicles, routes, filters, onFiltersChange, onAdd, onEdit, loading }) {
+  const vehicleRows = vehicles.map(vehicle => ({ ...vehicle, compliance: complianceStatusForVehicle(vehicle) }));
+  const columns = [{key:'id',label:'Vehicle',render:r=><div className="vehicle-cell"><span className={`vehicle-tile ${r.tone}`}><Icon name="bus"/></span><div><strong>{r.id}</strong><small>{r.plate}</small></div></div>},{key:'vehicleType',label:'Type',render:r=>dash(r.vehicleType)},{key:'driver',label:'Driver'},{key:'students',label:'Students'},{key:'speed',label:'Current speed',render:r=>r.speed?`${r.speed} km/h`:'—'},statusCell('status'),{key:'compliance',label:'Compliance',render:r=><Pill tone={complianceTone(r.compliance)}>{r.compliance}</Pill>}];
   const { history, openHistory, closeHistory } = useAssignmentHistory(
     row => api.getVehicleAssignmentHistory(row.vehicleId),
     item => ({ id: item.id, label: item.driverName, sublabel: item.route ? `Route: ${item.route}` : undefined, from: item.assignedAt, to: item.unassignedAt })
   );
-  return <DataPage type="Vehicles" data={vehicles} columns={columns} subtitle={`${vehicles.length} vehicles registered`} action="Add vehicle" fields={vehicleFields} onAdd={onAdd} onEdit={onEdit} onHistory={row => openHistory(row, `${row.id} · Driver history`, 'Drivers assigned to this vehicle over time')} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Vehicles" data={vehicleRows} columns={columns} subtitle={`${vehicles.length} vehicles registered`} action="Add vehicle" fields={vehicleFields} onAdd={onAdd} onEdit={onEdit} onHistory={row => openHistory(row, `${row.id} · Driver history`, 'Drivers assigned to this vehicle over time')} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'status', label:'All statuses', options:['On route','At school','Offline']},
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
-function RoutesPage({ routes, vehicles, filters, onFiltersChange, onAdd, onEdit, onDelete }) {
+function RoutesPage({ routes, vehicles, filters, onFiltersChange, onAdd, onEdit, onDelete, loading }) {
   const columns = [
     {key:'id',label:'Route',render:r=><strong>{r.id}</strong>},
     {key:'name',label:'Route name'},
@@ -759,13 +889,13 @@ function RoutesPage({ routes, vehicles, filters, onFiltersChange, onAdd, onEdit,
     ? {...field, options: ['Not assigned', ...vehicles.map(vehicle => vehicle.id)]}
     : field
   );
-  return <DataPage type="Routes" data={routes} columns={columns} subtitle={`${routes.length} routes configured`} action="Add route" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} createRecord={values => ({...values, vehicle: values.vehicle === 'Not assigned' ? '' : values.vehicle})} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Routes" data={routes} columns={columns} subtitle={`${routes.length} routes configured`} action="Add route" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} createRecord={values => ({...values, vehicle: values.vehicle === 'Not assigned' ? '' : values.vehicle})} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Bus assignment', options:[{value:'assigned',label:'Assigned to bus'},{value:'unassigned',label:'No bus'}]},
     {name:'vehicleId', label:'All buses', options:vehicles.map(vehicle => ({value: vehicle.id, label: vehicle.id}))}
   ]}/>;
 }
 
-function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAdd, onEdit }) {
+function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAdd, onEdit, loading }) {
   const columns = [personCell('name'),{key:'vehicle',label:'Vehicle'},{key:'route',label:'Assigned route'},statusCell('status'),{key:'licenseNumber',label:'License',render:r=>dash(r.licenseNumber)}];
   const fields = driverFields.map(field => {
     if (field.name === 'vehicle') {
@@ -780,14 +910,15 @@ function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAd
     row => api.getDriverAssignmentHistory(row.driverId),
     item => ({ id: item.id, label: item.vehicleCode, sublabel: item.route ? `Route: ${item.route}` : undefined, from: item.assignedAt, to: item.unassignedAt })
   );
-  return <DataPage type="Drivers" data={drivers} columns={columns} subtitle={`${drivers.length} drivers registered`} action="Add driver" fields={fields} onAdd={onAdd} onEdit={onEdit} onHistory={row => openHistory(row, `${row.name} · Vehicle history`, 'Vehicles this driver has been assigned to over time')} createRecord={values => ({...values, vehicle: values.vehicle === 'Not assigned' ? 'Unassigned' : values.vehicle, route: values.route === 'Not assigned' ? '' : values.route, initials: initialsFor(values.name)})} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Drivers" data={drivers} columns={columns} subtitle={`${drivers.length} drivers registered`} action="Add driver" fields={fields} onAdd={onAdd} onEdit={onEdit} onHistory={row => openHistory(row, `${row.name} · Vehicle history`, 'Vehicles this driver has been assigned to over time')} createRecord={values => ({...values, vehicle: values.vehicle === 'Not assigned' ? 'Unassigned' : values.vehicle, route: values.route === 'Not assigned' ? '' : values.route, initials: initialsFor(values.name)})} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'status', label:'All statuses', options:['On duty','Available','Off duty','At school']},
     {name:'docs', label:'All docs', options:['Verified','ExpiringSoon','Pending','Expired']},
     {name:'vehicleId', label:'All buses', options:vehicles.map(vehicle => ({value: vehicle.id, label: vehicle.id}))}
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
-function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete }) {
+function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onBulkAssign, loading }) {
+  const [bulkOpen, setBulkOpen] = useState(false);
   const studentRows = students.map(student => ({ ...student, totalDue: totalDueForStudent(feeDues, student) }));
   const columns = [
     {key:'f',label:'Sr. No.',render:r=><strong>{r.f}</strong>},
@@ -817,10 +948,10 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
       to: item.unassignedAt
     })
   );
-  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
-  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
+  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal students={studentRows} routes={routes} onClose={() => setBulkOpen(false)} onSave={onBulkAssign}/>}</DataPage>;
 }
 
 function FeeReport({ rows, students, onBack }) {
@@ -1103,7 +1234,7 @@ function SuperAdminLogin({ onLogin }) {
         <label><span>Email</span><input type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="admin@school.com" autoComplete="username" required/></label>
         <label><span>Password</span><input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter password" autoComplete="current-password" required/></label>
         {status.error && <div className="form-error login-error">{status.error}</div>}
-        <button className="primary-btn login-submit" disabled={status.loading} type="submit">{status.loading ? 'Checking...' : 'Login as super admin'}</button>
+        <button className="primary-btn login-submit" disabled={status.loading} type="submit">{status.loading && <span className="spinner"/>}{status.loading ? 'Checking...' : 'Login as super admin'}</button>
       </form>
       <small className="login-hint">Local default: admin@campus.local / Admin@12345. Change this on VPS using SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD.</small>
     </section>
@@ -1126,6 +1257,8 @@ export default function AdminApp() {
   const [feeDues, setFeeDues] = useState([]);
   const [docs, setDocs] = useState([]);
   const [apiStatus, setApiStatus] = useState({ loading: Boolean(session?.token), error: '' });
+  const [tableLoading, setTableLoading] = useState({});
+  const setResourceLoading = (key, value) => setTableLoading(current => ({ ...current, [key]: value }));
   const refreshCoreData = async () => {
     const [vehiclesData, routesData, driversData, studentsData, paymentsData, feeDuesData] = await Promise.all([
       api.getVehicles(),
@@ -1170,36 +1303,44 @@ export default function AdminApp() {
   useEffect(() => {
     if (!session?.token) return;
     let activeRequest = true;
+    setResourceLoading('vehicles', true);
     api.getVehicles(vehicleFilters)
       .then(rows => activeRequest && setVehicles(rows))
-      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter vehicles.' }));
+      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter vehicles.' }))
+      .finally(() => activeRequest && setResourceLoading('vehicles', false));
     return () => { activeRequest = false; };
   }, [vehicleFilters, session?.token]);
 
   useEffect(() => {
     if (!session?.token) return;
     let activeRequest = true;
+    setResourceLoading('routes', true);
     api.getRoutes(routeFilters)
       .then(rows => activeRequest && setRoutes(rows))
-      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter routes.' }));
+      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter routes.' }))
+      .finally(() => activeRequest && setResourceLoading('routes', false));
     return () => { activeRequest = false; };
   }, [routeFilters, session?.token]);
 
   useEffect(() => {
     if (!session?.token) return;
     let activeRequest = true;
+    setResourceLoading('drivers', true);
     api.getDrivers(driverFilters)
       .then(rows => activeRequest && setDrivers(rows))
-      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter drivers.' }));
+      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter drivers.' }))
+      .finally(() => activeRequest && setResourceLoading('drivers', false));
     return () => { activeRequest = false; };
   }, [driverFilters, session?.token]);
 
   useEffect(() => {
     if (!session?.token) return;
     let activeRequest = true;
+    setResourceLoading('students', true);
     api.getStudents(studentFilters)
       .then(rows => activeRequest && setStudents(rows))
-      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter students.' }));
+      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter students.' }))
+      .finally(() => activeRequest && setResourceLoading('students', false));
     return () => { activeRequest = false; };
   }, [studentFilters, session?.token]);
 
@@ -1278,6 +1419,14 @@ export default function AdminApp() {
     await api.deleteStudent(row.studentId || row.id);
     await refreshCoreData();
   };
+  const handleBulkAssignStudents = async assignments => {
+    const result = await api.assignStudentsBulk(assignments);
+    await refreshCoreData();
+    if (result?.failed?.length) {
+      throw new Error(`${result.failed.length} of ${assignments.length} assignments failed. First error: ${result.failed[0].error}`);
+    }
+    return result;
+  };
 
   const handleGenerateDues = async () => {
     await api.generateFeeDues({ month: currentMonthKey() });
@@ -1307,14 +1456,14 @@ export default function AdminApp() {
 
   let content = <Overview setActive={setActive} vehicles={vehicles} students={students} payments={payments} feeDues={feeDues}/>;
   if(active==='Live tracking') content=<TrackingPage vehicles={vehicles}/>;
-  if(active==='Routes') content=<RoutesPage routes={routes} vehicles={vehicles} filters={routeFilters} onFiltersChange={setRouteFilters} onAdd={handleAddRoute} onEdit={handleEditRoute} onDelete={handleDeleteRoute}/>;
-  if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle}/>;
-  if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver}/>;
-  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent}/>;
+  if(active==='Routes') content=<RoutesPage routes={routes} vehicles={vehicles} filters={routeFilters} onFiltersChange={setRouteFilters} onAdd={handleAddRoute} onEdit={handleEditRoute} onDelete={handleDeleteRoute} loading={tableLoading.routes}/>;
+  if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle} loading={tableLoading.vehicles}/>;
+  if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver} loading={tableLoading.drivers}/>;
+  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onBulkAssign={handleBulkAssignStudents} loading={tableLoading.students}/>;
   if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }}/>;
   if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
   if(active==='Notifications') content=<NotificationsPage/>;
   if(active==='Settings') content=<SettingsPage/>;
-  content = <>{apiStatus.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{apiStatus.error}</span></div>}{apiStatus.loading && <div className="api-banner muted"><Icon name="clock" size={17}/><span>Connecting to backend...</span></div>}{content}</>;
+  content = <>{apiStatus.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{apiStatus.error}</span></div>}{apiStatus.loading && <div className="api-banner muted"><span className="spinner"/><span>Connecting to backend...</span></div>}{content}</>;
   return <div className="app-shell"><Sidebar active={active} setActive={setActive} open={menu} setOpen={setMenu} admin={session.admin} onLogout={handleLogout}/>{menu&&<div className="backdrop" onClick={()=>setMenu(false)}/>}<main><Header title={active} setMenu={setMenu} noticeCount="0" setActive={setActive}/><div className="content">{content}</div><footer>campus_route Admin</footer></main></div>;
 }

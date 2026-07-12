@@ -135,6 +135,10 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(assignment)
   }),
+  assignStudentsBulk: assignments => request('/assignments/students/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ assignments })
+  }),
   getDriverAssignmentHistory: driverId => request(`/assignments/driver-history/${driverId}`),
   getVehicleAssignmentHistory: vehicleId => request(`/assignments/vehicle-history/${vehicleId}`),
   getStudentAssignmentHistory: studentId => request(`/assignments/student-history/${studentId}`),
