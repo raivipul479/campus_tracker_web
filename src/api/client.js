@@ -25,6 +25,8 @@ export function clearStoredSession() {
   localStorage.removeItem(AUTH_ADMIN_KEY);
 }
 
+export const SESSION_EXPIRED_EVENT = 'campus-route:session-expired';
+
 function queryString(params = {}) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
@@ -54,6 +56,10 @@ async function request(path, options = {}) {
       message = payload?.error?.message || message;
     } catch {
       // Keep the generic HTTP error when the response body is not JSON.
+    }
+    if (response.status === 401 && session?.token) {
+      clearStoredSession();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     }
     throw new Error(message);
   }
@@ -138,6 +144,9 @@ export const api = {
   assignStudentsBulk: assignments => request('/assignments/students/bulk', {
     method: 'POST',
     body: JSON.stringify({ assignments })
+  }),
+  unassignStudentByStudentId: studentId => request(`/assignments/student/by-student/${studentId}`, {
+    method: 'DELETE'
   }),
   getDriverAssignmentHistory: driverId => request(`/assignments/driver-history/${driverId}`),
   getVehicleAssignmentHistory: vehicleId => request(`/assignments/vehicle-history/${vehicleId}`),

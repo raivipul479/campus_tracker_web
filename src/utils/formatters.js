@@ -16,4 +16,8 @@ export const currentMonthKey = () => `${new Date().getFullYear()}-${String(new D
 
 export const parseAmount = value => Number(String(value || '').replace(/[^0-9.]/g, '')) || 0;
 
+export const roundToPaise = value => Math.round((Number(value) || 0) * 100) / 100;
+
+export const amountsEqual = (a, b) => Math.abs(roundToPaise(a) - roundToPaise(b)) < 0.005;
+
 export const dateInputValue = date => date.toISOString().slice(0, 10);

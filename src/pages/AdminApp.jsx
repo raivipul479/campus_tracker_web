@@ -6,8 +6,8 @@ import '../assets/global.css';
 import { Pill } from '../components/Pill.jsx';
 import { useDebouncedEffect } from '../hooks/useDebouncedEffect.js';
 import { campusService as api } from '../services/campusService.js';
-import { clearStoredSession, getStoredSession, setStoredSession } from '../api/client.js';
-import { currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, parseAmount, safeText } from '../utils/formatters.js';
+import { clearStoredSession, getStoredSession, SESSION_EXPIRED_EVENT, setStoredSession } from '../api/client.js';
+import { amountsEqual, currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, parseAmount, roundToPaise, safeText } from '../utils/formatters.js';
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 let googleMapsPromise;
@@ -100,6 +100,13 @@ function Sidebar({ active, setActive, open, setOpen, admin, onLogout }) {
 
 const emptyForm = fields => Object.fromEntries(fields.map(field => [field.name, field.defaultValue || '']));
 
+// Stored phones are E.164 (e.g. "+919928515725"); phone fields only accept a bare
+// 10-digit local number, so strip any country code before prefilling an edit form.
+const stripToLast10Digits = value => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+  return digits.length > 10 ? digits.slice(-10) : digits;
+};
+
 const compareSortValues = (a, b) => {
   if (a == null && b == null) return 0;
   if (a == null) return -1;
@@ -153,6 +160,7 @@ function SearchableSelect({ field, value, onChange }) {
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
         placeholder={field.placeholder || 'Search student...'}
         required={field.required}
       />
@@ -463,7 +471,20 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
         });
 
         marker.addListener('click', () => {
-          infoWindowRef.current.setContent(`<div class="map-popup"><strong>${selectedPoint.vehicleNo}</strong><span>${selectedPoint.alias || '-'}</span><span>Speed: ${selectedPoint.speed} km/h</span><span>Ignition: ${selectedPoint.ignition ? 'On' : 'Off'}</span></div>`);
+          // Build the popup as real DOM nodes (textContent, never innerHTML) since
+          // vehicleNo/alias come from a third-party GPS API we don't fully trust.
+          const container = document.createElement('div');
+          container.className = 'map-popup';
+          const title = document.createElement('strong');
+          title.textContent = selectedPoint.vehicleNo;
+          const aliasEl = document.createElement('span');
+          aliasEl.textContent = selectedPoint.alias || '-';
+          const speedEl = document.createElement('span');
+          speedEl.textContent = `Speed: ${selectedPoint.speed} km/h`;
+          const ignitionEl = document.createElement('span');
+          ignitionEl.textContent = `Ignition: ${selectedPoint.ignition ? 'On' : 'Off'}`;
+          container.append(title, aliasEl, speedEl, ignitionEl);
+          infoWindowRef.current.setContent(container);
           infoWindowRef.current.open({ anchor: marker, map: mapInstanceRef.current });
         });
         markersRef.current.push(marker);
@@ -640,6 +661,9 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
     setEditingRow(row);
     setFormValues(Object.fromEntries(resolveFields(row).map(field => {
       const value = row[field.name] ?? field.defaultValue ?? '';
+      if (field.digitsOnly && field.maxLength === 10) {
+        return [field.name, stripToLast10Digits(value)];
+      }
       return [field.name, field.name === 'vehicle' && value === 'Unassigned' ? 'Not assigned' : value];
     })));
     setFormError('');
@@ -679,8 +703,11 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
   };
   const runExtraAction = async item => {
     setRunningAction(item.label);
+    setRowActionError('');
     try {
       await item.onClick();
+    } catch (error) {
+      setRowActionError(error.message || `Unable to complete "${item.label}".`);
     } finally {
       setRunningAction('');
     }
@@ -719,7 +746,7 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
         </table>
         {!filtered.length && <div className="empty">No matching records found.</div>}
       </div>
-      <div className="table-footer"><span>Showing {sorted.length} of {data.length} records</span><div><button disabled>‹</button><button className="current">1</button><button>2</button><button>›</button></div></div>
+      <div className="table-footer"><span>Showing {sorted.length} of {data.length} records</span></div>
     </div>
     {modalOpen && <RecordModal title={editingRow ? `Edit ${type}` : action} fields={resolveFields(formValues)} values={formValues} setValues={setFormValues} onClose={() => !saving && setModalOpen(false)} onSubmit={submitForm} saving={saving} error={formError} deriveValues={deriveValues}/>}
   </section>;
@@ -768,18 +795,21 @@ const totalDueForStudent = (feeDues, student) => {
   if (!student) return 0;
   const studentId = Number(student.studentId ?? student.id);
   const due = currentMonthDueForStudent(feeDues, studentId);
-  if (due) return Math.max(0, Math.round(Number(due.balance || 0)));
-  return Math.max(0, Math.round(Number(student.monthlyDue || 0)));
+  if (due) return Math.max(0, roundToPaise(due.balance));
+  return Math.max(0, roundToPaise(student.monthlyDue));
 };
 
 const VEHICLE_COMPLIANCE_DATES = ['insuranceExpiry', 'fitnessExpiry', 'pucExpiry', 'permitExpiry'];
 const complianceStatusForVehicle = vehicle => {
   const dates = VEHICLE_COMPLIANCE_DATES.map(key => vehicle[key]);
   if (dates.some(date => !date)) return 'Incomplete';
-  const today = new Date();
-  const soonThreshold = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+  // Compare against the start of today, not the current instant — a document
+  // expiring "today" is still valid for the rest of today, not already expired.
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const soonThreshold = new Date(todayStart.getTime() + 30 * 24 * 60 * 60 * 1000);
   const parsed = dates.map(date => new Date(date));
-  if (parsed.some(date => date < today)) return 'Expired';
+  if (parsed.some(date => date < todayStart)) return 'Expired';
   if (parsed.some(date => date <= soonThreshold)) return 'Expiring soon';
   return 'Valid';
 };
@@ -848,7 +878,7 @@ const paymentFields = [
   { name: 'student', label: 'Student', type: 'select', options: [], required: true },
   { name: 'plan', label: 'Fee plan', type: 'select', options: ['Monthly', 'Quarterly', 'Half-yearly', 'Annual'], required: true, defaultValue: 'Monthly' },
   { name: 'paymentType', label: 'Payment type', type: 'select', options: ['Full payment', 'Partial payment'], required: true, defaultValue: 'Full payment' },
-  { name: 'amount', label: 'Amount', required: true, placeholder: '8400', pattern: '[0-9]+', inputMode: 'numeric', digitsOnly: true, title: 'Enter a whole number amount' },
+  { name: 'amount', label: 'Amount', required: true, placeholder: '8400', pattern: '[0-9]+(\\.[0-9]{1,2})?', inputMode: 'decimal', title: 'Enter a positive amount with up to 2 decimal places' },
   { name: 'date', label: 'Payment / due date', type: 'date', required: true },
   { name: 'method', label: 'Method', type: 'select', options: ['UPI', 'Card', 'Cash', 'Bank transfer', '-'], required: true },
   { name: 'status', label: 'Status', type: 'select', options: ['Paid', 'Collected', 'Pending', 'Overdue'], required: true }
@@ -935,7 +965,7 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
     {key:'secondaryPhone',label:'Secondary contact',render:r=>dash(r.secondaryPhone)}
   ];
   const fields = studentFields.map(field => field.name === 'route'
-    ? {...field, options: routes.map(route => route.id)}
+    ? {...field, options: ['Not assigned', ...routes.map(route => route.id)], defaultValue: 'Not assigned'}
     : field
   );
   const { history, openHistory, closeHistory } = useAssignmentHistory(
@@ -1082,20 +1112,24 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues }) {
 
     let due = isMonthlyPlan(values) ? currentMonthDueForStudent(feeDues, studentId) : null;
     if (isMonthlyPlan(values) && !due && Number(student?.monthlyDue || 0) > 0) {
-      // No fee due has been generated for this student/month yet — generate it now so the
-      // payment can be linked to a real due and its balance reconciled correctly.
-      await api.generateFeeDues({ month: currentMonthKey() });
+      // No fee due has been generated for this student/month yet — generate just this
+      // student's due (not the whole school) so the payment can be linked to a real due
+      // and its balance reconciled correctly.
+      await api.generateFeeDues({ month: currentMonthKey(), studentId });
       const refreshed = await api.getFeeDues({ month: currentMonthKey(), studentId });
       due = refreshed.find(item => Number(item.studentId) === studentId) || null;
     }
 
-    if (due && Number(due.balance || 0) > 0) {
-      const balance = Math.round(Number(due.balance));
+    if (due) {
+      const balance = roundToPaise(due.balance);
+      if (balance <= 0) {
+        throw new Error(`${student?.name || 'This student'}'s due for this month is already fully paid. Pick a different plan or month if this is a separate payment.`);
+      }
       const isFullPayment = (values.paymentType || 'Full payment') === 'Full payment';
-      if (isFullPayment && amount !== balance) {
+      if (isFullPayment && !amountsEqual(amount, balance)) {
         throw new Error(`Full payment amount must equal the total due (${formatCurrency(balance)}).`);
       }
-      if (!isFullPayment && amount >= balance) {
+      if (!isFullPayment && roundToPaise(amount) >= balance) {
         throw new Error(`Partial payment must be less than the total due (${formatCurrency(balance)}).`);
       }
     }
@@ -1236,13 +1270,18 @@ function SuperAdminLogin({ onLogin }) {
         {status.error && <div className="form-error login-error">{status.error}</div>}
         <button className="primary-btn login-submit" disabled={status.loading} type="submit">{status.loading && <span className="spinner"/>}{status.loading ? 'Checking...' : 'Login as super admin'}</button>
       </form>
-      <small className="login-hint">Local default: admin@campus.local / Admin@12345. Change this on VPS using SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD.</small>
+      {import.meta.env.DEV && <small className="login-hint">Local dev default: admin@campus.local / Admin@12345 (unless overridden by SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD). Never shown in production builds.</small>}
     </section>
   </main>;
 }
 
 export default function AdminApp() {
   const [session, setSession] = useState(() => getStoredSession());
+  useEffect(() => {
+    const handleSessionExpired = () => setSession(null);
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, []);
   const [active, setActive] = useState('Overview');
   const [menu, setMenu] = useState(false);
   const [vehicles, setVehicles] = useState([]);
@@ -1300,8 +1339,17 @@ export default function AdminApp() {
     };
   }, [session?.token]);
 
+  // The bootstrap effect above already loads the unfiltered vehicles/routes/drivers/
+  // students. Skip each filter effect's very first run so login doesn't fire the
+  // same four requests twice; still refetch on every real filter change after that.
+  const vehiclesFirstRun = useRef(true);
+  const routesFirstRun = useRef(true);
+  const driversFirstRun = useRef(true);
+  const studentsFirstRun = useRef(true);
+
   useEffect(() => {
     if (!session?.token) return;
+    if (vehiclesFirstRun.current) { vehiclesFirstRun.current = false; return; }
     let activeRequest = true;
     setResourceLoading('vehicles', true);
     api.getVehicles(vehicleFilters)
@@ -1313,6 +1361,7 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!session?.token) return;
+    if (routesFirstRun.current) { routesFirstRun.current = false; return; }
     let activeRequest = true;
     setResourceLoading('routes', true);
     api.getRoutes(routeFilters)
@@ -1324,6 +1373,7 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!session?.token) return;
+    if (driversFirstRun.current) { driversFirstRun.current = false; return; }
     let activeRequest = true;
     setResourceLoading('drivers', true);
     api.getDrivers(driverFilters)
@@ -1335,6 +1385,7 @@ export default function AdminApp() {
 
   useEffect(() => {
     if (!session?.token) return;
+    if (studentsFirstRun.current) { studentsFirstRun.current = false; return; }
     let activeRequest = true;
     setResourceLoading('students', true);
     api.getStudents(studentFilters)
@@ -1345,27 +1396,13 @@ export default function AdminApp() {
   }, [studentFilters, session?.token]);
 
   const handleAddVehicle = async record => {
-    const created = await api.createVehicle(record);
-    const driverName = safeText(record.driver);
-    if (driverName && driverName !== 'Unassigned') {
-      const driver = drivers.find(item => safeText(item.name).toLowerCase() === driverName.toLowerCase());
-      if (!driver?.driverId) {
-        throw new Error('Vehicle saved, but the driver name was not found for assignment.');
-      }
-      await api.assignDriver({ driverId: driver.driverId, vehicleId: created.id, route: created.route });
-    }
+    // The vehicle form's driver field is read-only (assignment happens from the
+    // Drivers page), so there is nothing else to do here after creation.
+    await api.createVehicle(record);
     await refreshCoreData();
   };
   const handleEditVehicle = async (row, record) => {
-    const updated = await api.updateVehicle(row.vehicleId || row.id, record);
-    const driverName = safeText(record.driver);
-    if (driverName && driverName !== 'Unassigned' && driverName !== row.driver) {
-      const driver = drivers.find(item => safeText(item.name).toLowerCase() === driverName.toLowerCase());
-      if (!driver?.driverId) {
-        throw new Error('Vehicle saved, but the driver name was not found for assignment.');
-      }
-      await api.assignDriver({ driverId: driver.driverId, vehicleId: updated.id, route: updated.route });
-    }
+    await api.updateVehicle(row.vehicleId || row.id, record);
     await refreshCoreData();
   };
 
@@ -1402,7 +1439,7 @@ export default function AdminApp() {
 
   const handleAddStudent = async record => {
     const created = await api.createStudent(record);
-    if (record.route) {
+    if (record.route && record.route !== 'Not assigned') {
       await api.assignStudent({ studentId: created.studentId, routeId: record.route });
     }
     await refreshCoreData();
@@ -1410,7 +1447,11 @@ export default function AdminApp() {
   const handleEditStudent = async (row, record) => {
     const studentId = row.studentId || row.id;
     const updated = await api.updateStudent(studentId, record);
-    if (record.route && record.route !== row.route) {
+    if (!record.route || record.route === 'Not assigned') {
+      if (row.route) {
+        await api.unassignStudentByStudentId(updated.studentId);
+      }
+    } else if (record.route !== row.route) {
       await api.assignStudent({ studentId: updated.studentId, routeId: record.route });
     }
     await refreshCoreData();
