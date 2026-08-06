@@ -343,8 +343,8 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
   </div>;
 }
 
-function Header({ title, setMenu, noticeCount, setActive }) {
-  return <header><div className="header-title"><button className="menu-btn" onClick={() => setMenu(true)}><Icon name="menu"/></button><div><h1>{title}</h1><p>{title === 'Overview' ? 'Here’s what’s happening with your fleet today.' : `Manage and review ${title.toLowerCase()}.`}</p></div></div><div className="header-actions"><label className="global-search"><Icon name="search" size={17}/><input placeholder="Search anything..."/><kbd>⌘ K</kbd></label><button className="icon-btn"><Icon name="bell"/><i>{noticeCount}</i></button><button className="primary-btn" onClick={() => setActive('Students')}><Icon name="plus" size={17}/> Quick add</button></div></header>;
+function Header({ title, setMenu }) {
+  return <header><div className="header-title"><button className="menu-btn" onClick={() => setMenu(true)}><Icon name="menu"/></button><div><h1>{title}</h1><p>{title === 'Overview' ? 'Here’s what’s happening with your fleet today.' : `Manage and review ${title.toLowerCase()}.`}</p></div></div></header>;
 }
 
 function StatCard({ label, value, change, icon, tone, detail }) {
@@ -616,7 +616,7 @@ function BaseDataPage({ type, data, columns, subtitle, action, children }) {
   </section>;
 }
 
-function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues, loading = false }) {
+function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, onRemind, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues, loading = false }) {
   const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [sort, setSort] = useState({ key: null, dir: 'asc' });
@@ -740,7 +740,7 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
             const isDeleting = deletingId === rowId;
             return <tr key={rowId}>
               {columns.map(column => <td key={column.key}>{column.render ? column.render(row, index) : row[column.key]}</td>)}
-              <td>{onEdit || onDelete || onHistory ? <div className="row-actions">{onHistory && <button type="button" className="text-action" onClick={() => onHistory(row)} disabled={isDeleting}>History</button>}{onEdit && <button type="button" className="text-action" onClick={() => openEditModal(row)} disabled={isDeleting}>Edit</button>}{onDelete && <button type="button" className="text-action danger" onClick={() => deleteRow(row)} disabled={isDeleting}>{isDeleting ? <span className="spinner spinner-sm"/> : 'Delete'}</button>}</div> : <button className="more">...</button>}</td>
+              <td>{onEdit || onDelete || onHistory || onRemind ? <div className="row-actions">{onHistory && <button type="button" className="text-action" onClick={() => onHistory(row)} disabled={isDeleting}>History</button>}{onRemind && <button type="button" className="text-action" onClick={() => runExtraAction({ label: `Remind ${row.name || row.id}`, onClick: () => onRemind(row) })} disabled={isDeleting || runningAction.startsWith('Remind ')}>Remind</button>}{onEdit && <button type="button" className="text-action" onClick={() => openEditModal(row)} disabled={isDeleting}>Edit</button>}{onDelete && <button type="button" className="text-action danger" onClick={() => deleteRow(row)} disabled={isDeleting}>{isDeleting ? <span className="spinner spinner-sm"/> : 'Delete'}</button>}</div> : <button className="more">...</button>}</td>
             </tr>;
           })}</tbody>
         </table>
@@ -947,7 +947,7 @@ function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAd
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
-function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onBulkAssign, loading }) {
+function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onRemind, onBulkAssign, loading }) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const studentRows = students.map(student => ({ ...student, totalDue: totalDueForStudent(feeDues, student) }));
   const columns = [
@@ -978,7 +978,7 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
       to: item.unassignedAt
     })
   );
-  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal students={studentRows} routes={routes} onClose={() => setBulkOpen(false)} onSave={onBulkAssign}/>}</DataPage>;
@@ -1054,7 +1054,7 @@ const studentIdFromSelection = selection => {
   return match ? Number(match[1]) : null;
 };
 
-function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues }) {
+function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRemindAll }) {
   const [showReport, setShowReport] = useState(false);
   const dues = monthlyDueRows(feeDues);
   const rows = [...dues, ...payments];
@@ -1140,7 +1140,7 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues }) {
       studentId,
       dueId: due?.dueId || due?.id || null
     };
-  }} secondaryAction={{ label: 'Fee report', icon: 'file', onClick: () => setShowReport(true) }} extraActions={[{ label: 'Generate monthly dues', icon: 'money', onClick: onGenerateDues }]}>{dueSummary}</DataPage>;
+  }} secondaryAction={{ label: 'Fee report', icon: 'file', onClick: () => setShowReport(true) }} extraActions={[{ label: 'Generate monthly dues', icon: 'money', onClick: onGenerateDues }, { label: 'Remind all pending', icon: 'bell', onClick: onRemindAll }]}>{dueSummary}</DataPage>;
 }
 
 function DocumentsPage({ docs, onAdd }) {
@@ -1236,8 +1236,105 @@ function TrackingPage({ vehicles }) {
   </section>;
 }
 
-function NotificationsPage() {
-  return <div className="panel placeholder"><span className="stat-icon blue"><Icon name="bell"/></span><h2>Notifications</h2><p>No notification records are stored until a database-backed notification endpoint is added.</p></div>;
+function NotificationsPage({ students, feeDues, onRemindStudent, onRemindAll }) {
+  const [selection, setSelection] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendingAll, setSendingAll] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const studentField = {
+    name: 'student',
+    label: 'Student',
+    placeholder: 'Search student by name...',
+    options: students.map(student => `${student.name} #${student.studentId || student.id}`)
+  };
+
+  const pendingCount = feeDues.filter(due => Number(due.balance) > 0).length;
+
+  const sendSingle = async () => {
+    const studentId = studentIdFromSelection(selection);
+    if (!studentId) {
+      setMessage({ tone: 'error', text: 'Search and select a student first.' });
+      return;
+    }
+    const student = students.find(item => Number(item.studentId || item.id) === studentId);
+    setSending(true);
+    setMessage(null);
+    try {
+      const result = await onRemindStudent({ studentId, name: student?.name });
+      setMessage({
+        tone: 'success',
+        text: result?.sent > 0
+          ? `Fee reminder sent to ${student?.name || 'the parent'}.`
+          : `Reminder saved for ${student?.name || 'this student'}, but no parent device is registered yet.`
+      });
+      setSelection('');
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message || 'Unable to send reminder.' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const sendAll = async () => {
+    if (!window.confirm('Send a fee reminder to every parent with outstanding dues?')) return;
+    setSendingAll(true);
+    setMessage(null);
+    try {
+      const result = await onRemindAll();
+      const skipped = result?.skippedAlreadyReminded || 0;
+      const skippedNote = skipped > 0 ? ` (${skipped} already reminded today, skipped)` : '';
+      setMessage({
+        tone: 'success',
+        text: result?.students > 0
+          ? `Fee reminders sent for ${result.students} student(s) with pending dues.${skippedNote}`
+          : skipped > 0
+            ? `All ${skipped} student(s) with pending dues were already reminded today.`
+            : 'No students currently have outstanding dues.'
+      });
+    } catch (error) {
+      setMessage({ tone: 'error', text: error.message || 'Unable to send reminders.' });
+    } finally {
+      setSendingAll(false);
+    }
+  };
+
+  return <section className="data-page">
+    <div className="panel" style={{ padding: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+        <span className="stat-icon blue"><Icon name="bell"/></span>
+        <div>
+          <h2 style={{ margin: 0 }}>Send fee reminder</h2>
+          <p style={{ margin: 0, color: 'var(--muted, #6b7280)' }}>Push a fee-due reminder to a parent's phone via the mobile app.</p>
+        </div>
+      </div>
+
+      {message && <div className={message.tone === 'error' ? 'form-error' : 'form-success'} style={{ margin: '12px 0 0' }}>{message.text}</div>}
+
+      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', marginTop: 20, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 280 }}>
+          <label><span>Student</span><SearchableSelect field={studentField} value={selection} onChange={setSelection}/></label>
+        </div>
+        <button type="button" className="filter-btn report-open-btn" onClick={sendSingle} disabled={sending}>
+          {sending ? <span className="spinner spinner-sm"/> : <Icon name="bell" size={16}/>}
+          Send reminder
+        </button>
+      </div>
+
+      <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid var(--border, #e5e7eb)' }}/>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <strong>Remind everyone with pending dues</strong>
+          <p style={{ margin: '4px 0 0', color: 'var(--muted, #6b7280)' }}>{pendingCount} due record(s) currently pending across all students.</p>
+        </div>
+        <button type="button" className="filter-btn report-open-btn" onClick={sendAll} disabled={sendingAll}>
+          {sendingAll ? <span className="spinner spinner-sm"/> : <Icon name="bell" size={16}/>}
+          Remind all pending
+        </button>
+      </div>
+    </div>
+  </section>;
 }
 
 function SettingsPage(){return <div className="panel placeholder"><span className="stat-icon blue"><Icon name="settings"/></span><h2>Workspace settings</h2><p>School profile, fee plans, routes, user access, and integrations can be configured here.</p><button className="primary-btn">Open configuration</button></div>}
@@ -1474,6 +1571,27 @@ export default function AdminApp() {
     await refreshCoreData();
   };
 
+  const handleRemindStudent = async row => {
+    const studentId = Number(row.studentId ?? row.id);
+    if (!studentId) throw new Error('This student has no id to send a reminder to.');
+    const result = await api.sendFeeReminder({ studentId });
+    window.alert(
+      result.sent > 0
+        ? `Fee reminder sent to ${row.name || 'the parent'}.`
+        : `Reminder saved for ${row.name || 'this student'}, but no parent device is registered yet.`
+    );
+  };
+
+  const handleRemindAllDues = async () => {
+    if (!window.confirm('Send a fee reminder to every parent with outstanding dues?')) return;
+    const result = await api.sendFeeReminder({ all: true });
+    window.alert(
+      result.students > 0
+        ? `Fee reminders sent for ${result.students} student(s) with pending dues.`
+        : 'No students currently have outstanding dues.'
+    );
+  };
+
   const handleLogin = nextSession => {
     setSession(nextSession);
     setApiStatus({ loading: true, error: '' });
@@ -1500,11 +1618,11 @@ export default function AdminApp() {
   if(active==='Routes') content=<RoutesPage routes={routes} vehicles={vehicles} filters={routeFilters} onFiltersChange={setRouteFilters} onAdd={handleAddRoute} onEdit={handleEditRoute} onDelete={handleDeleteRoute} loading={tableLoading.routes}/>;
   if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle} loading={tableLoading.vehicles}/>;
   if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver} loading={tableLoading.drivers}/>;
-  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onBulkAssign={handleBulkAssignStudents} loading={tableLoading.students}/>;
-  if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }}/>;
+  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} loading={tableLoading.students}/>;
+  if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }}/>;
   if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
-  if(active==='Notifications') content=<NotificationsPage/>;
+  if(active==='Notifications') content=<NotificationsPage students={students} feeDues={feeDues} onRemindStudent={async ({ studentId }) => api.sendFeeReminder({ studentId })} onRemindAll={async () => api.sendFeeReminder({ all: true })}/>;
   if(active==='Settings') content=<SettingsPage/>;
   content = <>{apiStatus.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{apiStatus.error}</span></div>}{apiStatus.loading && <div className="api-banner muted"><span className="spinner"/><span>Connecting to backend...</span></div>}{content}</>;
-  return <div className="app-shell"><Sidebar active={active} setActive={setActive} open={menu} setOpen={setMenu} admin={session.admin} onLogout={handleLogout}/>{menu&&<div className="backdrop" onClick={()=>setMenu(false)}/>}<main><Header title={active} setMenu={setMenu} noticeCount="0" setActive={setActive}/><div className="content">{content}</div><footer>campus_route Admin</footer></main></div>;
+  return <div className="app-shell"><Sidebar active={active} setActive={setActive} open={menu} setOpen={setMenu} admin={session.admin} onLogout={handleLogout}/>{menu&&<div className="backdrop" onClick={()=>setMenu(false)}/>}<main><Header title={active} setMenu={setMenu}/><div className="content">{content}</div><footer>campus_route Admin</footer></main></div>;
 }

@@ -100,6 +100,10 @@ export const api = {
   }),
   getFeeSummary: filters => request(`/fee-dues/summary${queryString(filters)}`),
   getFeeReport: filters => request(`/fee-dues/report${queryString(filters)}`),
+  sendFeeReminder: payload => request('/notifications/fee-reminder', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
   getDrivers: filters => request(`/drivers${queryString(filters)}`),
   createDriver: driver => request('/drivers', {
     method: 'POST',
