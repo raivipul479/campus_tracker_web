@@ -4,6 +4,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import '../assets/global.css';
 import { Pill } from '../components/Pill.jsx';
+import { AdimoveLogo } from '../components/AdimoveLogo.jsx';
 import { useDebouncedEffect } from '../hooks/useDebouncedEffect.js';
 import { campusService as api } from '../services/campusService.js';
 import { clearStoredSession, getStoredSession, SESSION_EXPIRED_EVENT, setStoredSession } from '../api/client.js';
@@ -60,7 +61,8 @@ const Icon = ({ name, size = 19 }) => {
     plus: <><path d="M12 5v14M5 12h14"/></>,
     down: <><path d="m6 9 6 6 6-6"/></>,
     check: <><path d="m5 12 4 4L19 6"/></>,
-    alert: <><path d="M10.3 3.6 2.2 18a2 2 0 0 0 1.8 3h16a2 2 0 0 0 1.8-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></>
+    alert: <><path d="M10.3 3.6 2.2 18a2 2 0 0 0 1.8 3h16a2 2 0 0 0 1.8-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></>,
+    refresh: <><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></>
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 };
@@ -86,13 +88,12 @@ const demoVehiclePoints = vehicles => vehicles.map(vehicle => ({
 
 function Sidebar({ active, setActive, open, setOpen, admin, onLogout }) {
   return <aside className={`sidebar ${open ? 'open' : ''}`}>
-    <div className="brand"><span className="brand-mark"><Icon name="route" size={22}/></span><div>campus<span>_route</span><small>School transport</small></div></div>
+    <div className="brand"><span className="brand-mark"><AdimoveLogo size={22} title="Adimove"/></span><div>Adi<span>move</span><small>School transport</small></div></div>
     <button className="close-menu" onClick={() => setOpen(false)}><Icon name="close"/></button>
     <div className="nav-label">Workspace</div>
     <nav>{nav.map(([label, icon]) => <button key={label} className={active === label ? 'active' : ''} onClick={() => { setActive(label); setOpen(false); }}><Icon name={icon}/><span>{label}</span></button>)}</nav>
     <div className="sidebar-bottom">
       <button onClick={() => setActive('Settings')}><Icon name="settings"/><span>Settings</span></button>
-      <div className="support"><span><Icon name="alert" size={17}/></span><div><strong>Need assistance?</strong><small>Contact support</small></div><Icon name="arrow" size={15}/></div>
       <div className="profile"><div className="avatar dark">{initialsFor(admin?.name || admin?.email || 'SA')}</div><div><strong>{admin?.name || 'Super Admin'}</strong><small>{admin?.email || 'Administrator'}</small></div><button className="logout-mini" onClick={onLogout} title="Logout"><Icon name="close" size={15}/></button></div>
     </div>
   </aside>;
@@ -272,7 +273,7 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
   const setSelection = (studentId, routeId) => setOverrides(current => ({ ...current, [studentId]: routeId }));
 
   const visibleStudents = students.filter(student =>
-    [student.name, student.area, student.phone, student.class].map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())
+    [student.name, student.area, student.address, student.guardianName, student.phone, student.class, student.section].map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())
   );
 
   const submit = async () => {
@@ -867,9 +868,12 @@ const studentFields = [
   { name: 'regNo', label: 'Reg. No.', required: true, minLength: 3, maxLength: 64 },
   { name: 'name', label: 'Student name', required: true, minLength: 2, maxLength: 160 },
   { name: 'class', label: 'Class', required: true, maxLength: 80 },
+  { name: 'section', label: 'Section', placeholder: 'A', maxLength: 16 },
+  { name: 'guardianName', label: "Father's / Mother's name", maxLength: 160 },
   { name: 'kms', label: 'Kms', type: 'number', min: '0', max: '500', step: '0.01', inputMode: 'decimal' },
   { name: 'tagNo', label: 'Tag No.', required: true, placeholder: 'T-A', maxLength: 32 },
   { name: 'area', label: 'Area', required: true, minLength: 2, maxLength: 180 },
+  { name: 'address', label: 'Address', type: 'textarea', full: true, maxLength: 255 },
   { name: 'phone', label: 'Phone number', required: true, pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
   { name: 'secondaryPhone', label: 'Secondary contact number', pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
   { name: 'route', label: 'Route', type: 'select', options: [] }
@@ -955,12 +959,15 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
     {key:'regNo',label:'Reg. No.'},
     {...personCell('name'), label:'Student name'},
     {key:'class',label:'Class'},
+    {key:'section',label:'Section',render:r=>dash(r.section)},
+    {key:'guardianName',label:"Father's / Mother's name",render:r=>dash(r.guardianName)},
     {key:'kms',label:'Kms',render:r=>dash(r.kms)},
     {key:'tagNo',label:'Tag No.',render:r=><Pill tone="blue">{r.tagNo}</Pill>},
     {key:'route',label:'Route',render:r=>dash(r.route)},
     {key:'monthlyDue',label:'Monthly due',render:r=><strong>{formatCurrency(r.monthlyDue)}</strong>},
     {key:'totalDue',label:'Total due',render:r=><strong>{formatCurrency(r.totalDue)}</strong>},
     {key:'area',label:'Area'},
+    {key:'address',label:'Address',render:r=>dash(r.address)},
     {key:'phone',label:'Phone Number'},
     {key:'secondaryPhone',label:'Secondary contact',render:r=>dash(r.secondaryPhone)}
   ];
@@ -1236,11 +1243,64 @@ function TrackingPage({ vehicles }) {
   </section>;
 }
 
+const NOTIFICATION_TYPES = [
+  { value: 'all', label: 'All types' },
+  { value: 'FeeReminder', label: 'Fee reminder' },
+  { value: 'Pickup', label: 'Pickup' },
+  { value: 'Drop', label: 'Drop' }
+];
+
+const notificationTypeLabel = type =>
+  NOTIFICATION_TYPES.find(item => item.value === type)?.label || dash(type);
+
+function formatSentAt(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+}
+
 function NotificationsPage({ students, feeDues, onRemindStudent, onRemindAll }) {
   const [selection, setSelection] = useState('');
   const [sending, setSending] = useState(false);
   const [sendingAll, setSendingAll] = useState(false);
   const [message, setMessage] = useState(null);
+
+  // Sent history, loaded from the backend rather than derived from local state
+  // so it also shows Pickup/Drop notifications raised by drivers.
+  const [history, setHistory] = useState([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [query, setQuery] = useState('');
+
+  const loadHistory = async (type = typeFilter) => {
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const result = await api.getNotifications({ type, limit: 200 });
+      setHistory(result?.notifications || []);
+      setHistoryTotal(result?.total || 0);
+    } catch (error) {
+      setHistoryError(error.message || 'Unable to load sent notifications.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => { loadHistory(typeFilter); }, [typeFilter]);
+
+  const filteredHistory = useMemo(() => {
+    const text = safeText(query).toLowerCase();
+    if (!text) return history;
+    return history.filter(row =>
+      [row.studentName, row.phone, row.title, row.body, row.type]
+        .map(safeText).join(' ').toLowerCase().includes(text)
+    );
+  }, [history, query]);
 
   const studentField = {
     name: 'student',
@@ -1269,6 +1329,7 @@ function NotificationsPage({ students, feeDues, onRemindStudent, onRemindAll }) 
           : `Reminder saved for ${student?.name || 'this student'}, but no parent device is registered yet.`
       });
       setSelection('');
+      loadHistory();
     } catch (error) {
       setMessage({ tone: 'error', text: error.message || 'Unable to send reminder.' });
     } finally {
@@ -1282,16 +1343,13 @@ function NotificationsPage({ students, feeDues, onRemindStudent, onRemindAll }) 
     setMessage(null);
     try {
       const result = await onRemindAll();
-      const skipped = result?.skippedAlreadyReminded || 0;
-      const skippedNote = skipped > 0 ? ` (${skipped} already reminded today, skipped)` : '';
       setMessage({
         tone: 'success',
         text: result?.students > 0
-          ? `Fee reminders sent for ${result.students} student(s) with pending dues.${skippedNote}`
-          : skipped > 0
-            ? `All ${skipped} student(s) with pending dues were already reminded today.`
-            : 'No students currently have outstanding dues.'
+          ? `Fee reminders sent for ${result.students} student(s) with pending dues.`
+          : 'No students currently have outstanding dues.'
       });
+      loadHistory();
     } catch (error) {
       setMessage({ tone: 'error', text: error.message || 'Unable to send reminders.' });
     } finally {
@@ -1334,10 +1392,102 @@ function NotificationsPage({ students, feeDues, onRemindStudent, onRemindAll }) 
         </button>
       </div>
     </div>
+
+    <div className="panel table-panel">
+      <div className="table-toolbar">
+        <div>
+          <h2>Sent notifications</h2>
+          <p>Every notification delivered to parents, including pickup and drop alerts raised by drivers.</p>
+        </div>
+        <div className="toolbar-actions">
+          <label className="table-search">
+            <Icon name="search" size={16}/>
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search student, phone or message..."/>
+          </label>
+          <select className="filter-btn" value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+            {NOTIFICATION_TYPES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+          <button type="button" className="filter-btn" onClick={() => loadHistory()} disabled={historyLoading}>
+            {historyLoading ? <span className="spinner spinner-sm"/> : <Icon name="refresh" size={16}/>}
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {historyError && <div className="form-error" style={{ margin: '0 16px 12px' }}>{historyError}</div>}
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Sent</th>
+              <th>Type</th>
+              <th>Student</th>
+              <th>Parent phone</th>
+              <th>Message</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredHistory.map(row => <tr key={row.id}>
+              <td>{formatSentAt(row.createdAt)}</td>
+              <td><Pill tone="blue">{notificationTypeLabel(row.type)}</Pill></td>
+              <td>{dash(row.studentName)}</td>
+              <td>{dash(row.phone)}</td>
+              <td>
+                <strong>{dash(row.title)}</strong>
+                <div style={{ color: 'var(--muted, #6b7280)', fontSize: 13 }}>{dash(row.body)}</div>
+              </td>
+              <td><Pill tone={row.read ? 'green' : 'amber'}>{row.read ? 'Read' : 'Unread'}</Pill></td>
+            </tr>)}
+          </tbody>
+        </table>
+        {historyLoading && !filteredHistory.length && <div className="empty">Loading sent notifications...</div>}
+        {!historyLoading && !filteredHistory.length && <div className="empty">No notifications have been sent yet.</div>}
+      </div>
+
+      <div className="table-footer">
+        <span>Showing {filteredHistory.length} of {historyTotal} notification(s)</span>
+      </div>
+    </div>
   </section>;
 }
 
-function SettingsPage(){return <div className="panel placeholder"><span className="stat-icon blue"><Icon name="settings"/></span><h2>Workspace settings</h2><p>School profile, fee plans, routes, user access, and integrations can be configured here.</p><button className="primary-btn">Open configuration</button></div>}
+function SettingsPage() {
+  return <section className="data-page">
+    <div className="panel placeholder">
+      <span className="stat-icon blue"><Icon name="settings"/></span>
+      <h2>Workspace settings</h2>
+      <p>School profile, fee plans, routes, user access, and integrations can be configured here.</p>
+      <button className="primary-btn">Open configuration</button>
+    </div>
+
+    <div className="panel" style={{ padding: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+        <span className="stat-icon blue"><Icon name="file"/></span>
+        <div>
+          <h2 style={{ margin: 0 }}>Legal</h2>
+          <p style={{ margin: 0, color: 'var(--muted, #6b7280)' }}>Policies published to parents and app stores.</p>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginTop: 20 }}>
+        <div>
+          <strong>Privacy policy</strong>
+          <p style={{ margin: '4px 0 0', color: 'var(--muted, #6b7280)' }}>
+            Explains what the app collects and who can see it. This page is public — it needs to be
+            reachable without logging in for the Play Store listing.
+          </p>
+        </div>
+        {/* Plain anchor with target: /privacy is served outside the admin session gate. */}
+        <a className="filter-btn report-open-btn" href="/privacy" target="_blank" rel="noopener noreferrer">
+          <Icon name="file" size={16}/>
+          View privacy policy
+        </a>
+      </div>
+    </div>
+  </section>;
+}
 
 function SuperAdminLogin({ onLogin }) {
   const [email, setEmail] = useState('admin@campus.local');
@@ -1358,7 +1508,7 @@ function SuperAdminLogin({ onLogin }) {
 
   return <main className="login-screen">
     <section className="login-card">
-      <div className="login-brand"><span className="brand-mark"><Icon name="route" size={24}/></span><div><strong>campus_route</strong><small>Super admin access</small></div></div>
+      <div className="login-brand"><span className="brand-mark"><AdimoveLogo size={24} title="Adimove"/></span><div><strong>Adimove</strong><small>Super admin access</small></div></div>
       <h1>Login to admin dashboard</h1>
       <p>Use your super-admin credentials to manage students, vehicles, routes, fees, and transport operations.</p>
       <form onSubmit={submit}>
@@ -1368,6 +1518,8 @@ function SuperAdminLogin({ onLogin }) {
         <button className="primary-btn login-submit" disabled={status.loading} type="submit">{status.loading && <span className="spinner"/>}{status.loading ? 'Checking...' : 'Login as super admin'}</button>
       </form>
       {import.meta.env.DEV && <small className="login-hint">Local dev default: admin@campus.local / Admin@12345 (unless overridden by SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD). Never shown in production builds.</small>}
+      {/* Plain anchor, not a state change: /privacy renders outside this gate. */}
+      <small className="login-hint"><a href="/privacy">Privacy policy</a></small>
     </section>
   </main>;
 }
@@ -1624,5 +1776,5 @@ export default function AdminApp() {
   if(active==='Notifications') content=<NotificationsPage students={students} feeDues={feeDues} onRemindStudent={async ({ studentId }) => api.sendFeeReminder({ studentId })} onRemindAll={async () => api.sendFeeReminder({ all: true })}/>;
   if(active==='Settings') content=<SettingsPage/>;
   content = <>{apiStatus.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{apiStatus.error}</span></div>}{apiStatus.loading && <div className="api-banner muted"><span className="spinner"/><span>Connecting to backend...</span></div>}{content}</>;
-  return <div className="app-shell"><Sidebar active={active} setActive={setActive} open={menu} setOpen={setMenu} admin={session.admin} onLogout={handleLogout}/>{menu&&<div className="backdrop" onClick={()=>setMenu(false)}/>}<main><Header title={active} setMenu={setMenu}/><div className="content">{content}</div><footer>campus_route Admin</footer></main></div>;
+  return <div className="app-shell"><Sidebar active={active} setActive={setActive} open={menu} setOpen={setMenu} admin={session.admin} onLogout={handleLogout}/>{menu&&<div className="backdrop" onClick={()=>setMenu(false)}/>}<main><Header title={active} setMenu={setMenu}/><div className="content">{content}</div><footer>Adimove Admin</footer></main></div>;
 }

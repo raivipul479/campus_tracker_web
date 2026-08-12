@@ -104,6 +104,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payload)
   }),
+  getNotifications: filters => request(`/notifications${queryString(filters)}`),
   getDrivers: filters => request(`/drivers${queryString(filters)}`),
   createDriver: driver => request('/drivers', {
     method: 'POST',
