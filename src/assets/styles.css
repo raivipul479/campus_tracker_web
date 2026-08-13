@@ -110,3 +110,33 @@ button:disabled .spinner{opacity:.85}
   .policy-section h2{font-size:19px}
 }
 @media(prefers-reduced-motion:reduce){.policy-page{scroll-behavior:auto}}
+
+/* ---- bulk student import modal ---- */
+.import-drop{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  padding:22px;border:1px dashed #c6d2dd;border-radius:12px;background:#f8fafc;cursor:pointer;
+  color:#4a5a6a;font-size:13px;font-weight:600;transition:border-color .15s,background .15s}
+.import-drop:hover{border-color:var(--brand);background:#f2f8f6}
+.import-drop input{display:none}
+.import-note{font-size:12px;color:#6f7b8e;margin:8px 0 0}
+.import-stats{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0;padding:12px;border-radius:10px;
+  background:#f8fafc;border:1px solid #e6edf3}
+.import-stats span{font-size:12px;color:#4a5a6a}
+.import-stats strong{display:block;font-size:18px;color:#172033;line-height:1.2}
+.import-stats .import-bad strong{color:#c0392b}
+.import-table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px}
+.import-table th{text-align:left;padding:6px 8px;background:#f1f5f9;color:#4a5a6a;font-size:11px;
+  text-transform:uppercase;letter-spacing:.04em}
+.import-table td{padding:6px 8px;border-top:1px solid #eef2f6;color:#172033}
+.import-rejects{margin-top:14px;padding:12px;border-radius:10px;background:#fdf3f2;border:1px solid #f5d5d0}
+.import-rejects>strong{font-size:12px;color:#c0392b}
+.import-rejects ul{list-style:none;margin:8px 0 0;padding:0;max-height:220px;overflow-y:auto}
+.import-rejects li{font-size:12px;color:#4a5a6a;padding:5px 0;border-top:1px solid #f7e2de}
+.import-rejects li small{display:block;color:#8b98a8;font-size:11px;margin-top:2px}
+.import-columns{margin-top:14px}
+.import-columns summary{cursor:pointer;font-size:12px;font-weight:600;color:#4a5a6a}
+.import-columns ol{margin:8px 0 0;padding-left:20px;font-size:12px;color:#6f7b8e;
+  columns:2;column-gap:24px}
+.import-progress{margin:12px 0}
+.import-progress-bar{height:8px;border-radius:999px;background:#e6edf3;overflow:hidden}
+.import-progress-bar span{display:block;height:100%;background:var(--brand);
+  border-radius:999px;transition:width .25s ease}

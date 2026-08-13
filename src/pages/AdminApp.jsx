@@ -62,7 +62,8 @@ const Icon = ({ name, size = 19 }) => {
     down: <><path d="m6 9 6 6 6-6"/></>,
     check: <><path d="m5 12 4 4L19 6"/></>,
     alert: <><path d="M10.3 3.6 2.2 18a2 2 0 0 0 1.8 3h16a2 2 0 0 0 1.8-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></>,
-    refresh: <><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></>
+    refresh: <><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></>,
+    upload: <><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></>
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 };
@@ -249,6 +250,279 @@ function HistoryModal({ title, subtitle, rows, loading, error, onClose }) {
       </div>
       <div className="modal-actions">
         <button type="button" className="filter-btn" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  </div>;
+}
+
+// RFC4180 parser. The transport sheet's addresses contain commas, embedded
+// quotes ("D 803, Bhavyaa Green Luxuria...") and occasional newlines, so
+// splitting on ',' silently corrupts rows.
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quoted) {
+      if (char === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else quoted = false;
+      } else field += char;
+      continue;
+    }
+    if (char === '"') { quoted = true; continue; }
+    if (char === ',') { row.push(field); field = ''; continue; }
+    if (char === '\r') continue;
+    if (char === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+    field += char;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Columns are positional, matching the transport sheet. Header names cannot be
+// used: the sheet has two "S NO." columns and two phone columns differing only
+// by case, so any name-based lookup collides and loses data.
+const IMPORT_COLUMNS = [
+  'A  S NO.', 'B  S NO. (registration)', "C  STUDENT'S NAME", 'D  CLASS', 'E  SEC.',
+  "F  FATHER'S/MOTHER'S NAME", 'G  ADDRESS', 'H  Phone Number', 'I  PHONE NUMBER',
+  'J  ROUTE NO', 'K  Slab KMS', 'L  1 PM DROP', 'M  FEES'
+];
+
+// Reads the first worksheet of an .xlsx/.xls file into a 2D array of strings.
+//
+// raw:false formats every cell as text, which matters for phone numbers stored
+// as numbers — the raw value would come through as a JS number and long ones
+// can render in scientific notation.
+//
+// defval:'' keeps empty cells as empty strings. Without it SheetJS omits them,
+// rows become ragged, and every column after a blank cell shifts left — which
+// would silently attach one family's phone number to another family's child.
+// SheetJS is ~350kB, and only this modal needs it, so it is imported lazily —
+// the dashboard bundle stays small and the library is fetched the first time
+// someone actually picks an .xlsx file.
+async function readWorkbook(buffer) {
+  const XLSX = await import('xlsx');
+  const workbook = XLSX.read(buffer, { type: 'array' });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) throw new Error('That workbook has no sheets.');
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    header: 1,
+    raw: false,
+    defval: '',
+    blankrows: false
+  });
+  return { sheetName, sheetCount: workbook.SheetNames.length, rows };
+}
+
+// Rows per request. Each student is its own transaction server-side, so a big
+// sheet against a distant database can take minutes and time the request out.
+// Chunking keeps every request short; partial progress is safe because the
+// import is idempotent on registration number.
+const IMPORT_CHUNK_SIZE = 200;
+
+// Mirrors isHeaderRow() on the server — the sheet repeats its header at the
+// start of every route block, and those rows must not be mistaken for students.
+const isSheetHeaderRow = row => {
+  const name = String(row?.[2] ?? '').toUpperCase();
+  const serial = String(row?.[0] ?? '').toUpperCase();
+  return (name.includes('STUDENT') && name.includes('NAME')) ||
+    (serial === 'S NO.' && String(row?.[3] ?? '').toUpperCase() === 'CLASS');
+};
+
+// The server de-duplicates within a single request, so once the sheet is split
+// into chunks the same registration number appearing in two different chunks
+// would slip through and the second would silently overwrite the first. This
+// catches those across the whole sheet before anything is sent.
+function findDuplicateRegistrations(rows) {
+  const seen = new Map();
+  const duplicates = [];
+  rows.forEach((row, index) => {
+    if (isSheetHeaderRow(row)) return;
+    const reg = String(row?.[1] ?? '').trim();
+    if (!reg) return;
+    const key = reg.toLowerCase();
+    const first = seen.get(key);
+    if (first) {
+      duplicates.push({
+        rowNumber: index + 1,
+        reason: `duplicate registration number "${reg}", also on row ${first}`,
+        preview: [reg, String(row?.[2] ?? '')].filter(Boolean).join(' | ')
+      });
+    } else {
+      seen.set(key, index + 1);
+    }
+  });
+  return duplicates;
+}
+
+function ImportStudentsModal({ onClose, onImported }) {
+  const [fileName, setFileName] = useState('');
+  const [sheetInfo, setSheetInfo] = useState(null);
+  const [rows, setRows] = useState(null);
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [error, setError] = useState('');
+
+  const pickFile = async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setError(''); setResult(null); setRows(null); setSheetInfo(null); setFileName(file.name);
+
+    try {
+      let parsed;
+      if (/\.xlsx?$/i.test(file.name)) {
+        const workbook = await readWorkbook(await file.arrayBuffer());
+        parsed = workbook.rows;
+        setSheetInfo(workbook);
+      } else {
+        parsed = parseCsv(await file.text());
+      }
+      parsed = parsed
+        .map(row => (Array.isArray(row) ? row.map(cell => String(cell ?? '')) : []))
+        .filter(row => row.some(cell => cell.trim() !== ''));
+      if (!parsed.length) { setError('That file has no rows.'); return; }
+      setRows(parsed);
+    } catch (err) {
+      setError(err.message || 'Could not read that file.');
+    }
+  };
+
+  const run = async commit => {
+    if (!rows) return;
+    setBusy(true); setError(''); setResult(null);
+
+    // Caught up front rather than per chunk — see findDuplicateRegistrations.
+    const duplicates = findDuplicateRegistrations(rows);
+    const duplicateRowNumbers = new Set(duplicates.map(d => d.rowNumber));
+    const sendable = rows.filter((_row, index) => !duplicateRowNumbers.has(index + 1));
+
+    const chunks = [];
+    for (let i = 0; i < sendable.length; i += IMPORT_CHUNK_SIZE) {
+      chunks.push({ rows: sendable.slice(i, i + IMPORT_CHUNK_SIZE), offset: i });
+    }
+
+    const totals = {
+      dryRun: !commit, total: 0, valid: 0, created: 0, updated: 0,
+      routesAssigned: 0, rejected: [...duplicates], sample: []
+    };
+
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        setProgress({ done: i, total: chunks.length });
+        const response = await api.importStudents(chunks[i].rows, commit, chunks[i].offset);
+        totals.total += response.total ?? 0;
+        totals.valid += response.valid ?? 0;
+        totals.created += response.created ?? 0;
+        totals.updated += response.updated ?? 0;
+        totals.routesAssigned += response.routesAssigned ?? 0;
+        if (response.rejected?.length) totals.rejected.push(...response.rejected);
+        if (totals.sample.length < 10 && response.sample?.length) {
+          totals.sample.push(...response.sample.slice(0, 10 - totals.sample.length));
+        }
+        setProgress({ done: i + 1, total: chunks.length });
+        setResult({ ...totals });
+      }
+      totals.rejected.sort((a, b) => a.rowNumber - b.rowNumber);
+      setResult({ ...totals });
+      if (commit) await onImported();
+    } catch (err) {
+      // Earlier chunks are already committed. Say so plainly — re-running is
+      // safe because students are matched on registration number.
+      setResult({ ...totals });
+      setError(`${err.message || 'Import failed.'}${commit && totals.created + totals.updated > 0
+        ? ` — ${totals.created + totals.updated} student(s) were already saved before this failed. Re-running is safe; existing rows are updated, not duplicated.`
+        : ''}`);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  const rejected = result?.rejected ?? [];
+
+  return <div className="record-modal-backdrop" onClick={onClose}>
+    <div className="record-modal bulk-assign-modal" onClick={event => event.stopPropagation()}>
+      <div className="modal-head">
+        <div>
+          <h2>Import students from sheet</h2>
+          <p>Upload the transport list as Excel (.xlsx) or CSV. Columns are read by position, so keep the original column order.</p>
+        </div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={16}/></button>
+      </div>
+
+      <div className="bulk-assign-body">
+        <label className="import-drop">
+          <input type="file" accept=".xlsx,.xls,.csv,text/csv" onChange={pickFile}/>
+          <Icon name="upload" size={20}/>
+          <span>{fileName || 'Choose an .xlsx or .csv file'}</span>
+        </label>
+
+        {sheetInfo && <p className="import-note">
+          Reading sheet <b>{sheetInfo.sheetName}</b>
+          {sheetInfo.sheetCount > 1 && ` — this workbook has ${sheetInfo.sheetCount} sheets and only the first is imported.`}
+        </p>}
+        {rows && !result && !progress && <p className="import-note">
+          {rows.length} row(s) read, including header rows.
+          {rows.length > IMPORT_CHUNK_SIZE && ` Will be sent in ${Math.ceil(rows.length / IMPORT_CHUNK_SIZE)} batches of ${IMPORT_CHUNK_SIZE}.`}
+          {' '}Run a dry run to see what would be imported.
+        </p>}
+
+        {progress && <div className="import-progress">
+          <div className="import-progress-bar">
+            <span style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }}/>
+          </div>
+          <p className="import-note">Batch {Math.min(progress.done + 1, progress.total)} of {progress.total} — {Math.round((progress.done / progress.total) * 100)}% complete. Leave this open.</p>
+        </div>}
+
+        {error && <p className="form-error">{error}</p>}
+
+        {result && <div className="import-result">
+          <div className="import-stats">
+            <span><strong>{result.valid}</strong> valid</span>
+            <span><strong>{result.created}</strong> created</span>
+            <span><strong>{result.updated}</strong> updated</span>
+            <span><strong>{result.routesAssigned}</strong> routes</span>
+            <span className={rejected.length ? 'import-bad' : ''}><strong>{rejected.length}</strong> rejected</span>
+          </div>
+          {result.dryRun && <p className="import-note">Dry run — nothing was written yet.</p>}
+
+          {result.sample?.length > 0 && <table className="import-table">
+            <thead><tr><th>Reg. No.</th><th>Name</th><th>Class</th><th>Guardian</th><th>Phone</th><th>Route</th></tr></thead>
+            <tbody>{result.sample.map(row => <tr key={row.registrationNumber}>
+              <td>{row.registrationNumber}</td><td>{row.fullName}</td><td>{row.className}</td>
+              <td>{dash(row.guardianName)}</td><td>{row.phone}</td><td>{dash(row.routeCode)}</td>
+            </tr>)}</tbody>
+          </table>}
+
+          {rejected.length > 0 && <div className="import-rejects">
+            <strong>Rejected rows (not imported)</strong>
+            <ul>{rejected.slice(0, 50).map(reject => <li key={reject.rowNumber}>
+              <b>Row {reject.rowNumber}</b> — {reject.reason}<small>{reject.preview}</small>
+            </li>)}</ul>
+            {rejected.length > 50 && <p className="import-note">…and {rejected.length - 50} more.</p>}
+          </div>}
+        </div>}
+
+        <details className="import-columns">
+          <summary>Expected column order</summary>
+          <ol>{IMPORT_COLUMNS.map(column => <li key={column}>{column}</li>)}</ol>
+          <p className="import-note">Repeated header rows inside the sheet are skipped automatically. Existing students are matched on registration number (column B) and updated, so re-importing is safe.</p>
+        </details>
+      </div>
+
+      <div className="modal-actions">
+        <button type="button" className="filter-btn" onClick={onClose}>Close</button>
+        <button type="button" className="filter-btn" disabled={!rows || busy} onClick={() => run(false)}>
+          {busy ? 'Checking…' : 'Dry run'}
+        </button>
+        <button type="button" className="primary-btn" disabled={!rows || busy || !result || result.valid === 0} onClick={() => run(true)}>
+          {busy ? 'Importing…' : `Import ${result?.valid ?? ''} student(s)`}
+        </button>
       </div>
     </div>
   </div>;
@@ -951,8 +1225,9 @@ function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAd
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
-function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onRemind, onBulkAssign, loading }) {
+function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onRemind, onBulkAssign, onImported, loading }) {
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const studentRows = students.map(student => ({ ...student, totalDue: totalDueForStudent(feeDues, student) }));
   const columns = [
     {key:'f',label:'Sr. No.',render:r=><strong>{r.f}</strong>},
@@ -985,10 +1260,10 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
       to: item.unassignedAt
     })
   );
-  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Import sheet', icon: 'upload', onClick: () => setImportOpen(true) }, { label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
-  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal students={studentRows} routes={routes} onClose={() => setBulkOpen(false)} onSave={onBulkAssign}/>}</DataPage>;
+  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal students={studentRows} routes={routes} onClose={() => setBulkOpen(false)} onSave={onBulkAssign}/>}{importOpen && <ImportStudentsModal onClose={() => setImportOpen(false)} onImported={onImported}/>}</DataPage>;
 }
 
 function FeeReport({ rows, students, onBack }) {
@@ -1770,7 +2045,7 @@ export default function AdminApp() {
   if(active==='Routes') content=<RoutesPage routes={routes} vehicles={vehicles} filters={routeFilters} onFiltersChange={setRouteFilters} onAdd={handleAddRoute} onEdit={handleEditRoute} onDelete={handleDeleteRoute} loading={tableLoading.routes}/>;
   if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle} loading={tableLoading.vehicles}/>;
   if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver} loading={tableLoading.drivers}/>;
-  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} loading={tableLoading.students}/>;
+  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} onImported={refreshCoreData} loading={tableLoading.students}/>;
   if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }}/>;
   if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
   if(active==='Notifications') content=<NotificationsPage students={students} feeDues={feeDues} onRemindStudent={async ({ studentId }) => api.sendFeeReminder({ studentId })} onRemindAll={async () => api.sendFeeReminder({ all: true })}/>;

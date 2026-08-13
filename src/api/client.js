@@ -146,6 +146,14 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(assignment)
   }),
+  // Bulk student import. `rows` is the raw sheet as a 2D array of strings —
+  // every interpretation rule lives on the server. Defaults to a dry run.
+  // rowOffset is the index of the first row within the original sheet, so
+  // rejects reported from a later chunk still cite findable row numbers.
+  importStudents: (rows, commit = false, rowOffset = 0) => request('/students/import', {
+    method: 'POST',
+    body: JSON.stringify({ rows, commit, rowOffset })
+  }),
   assignStudentsBulk: assignments => request('/assignments/students/bulk', {
     method: 'POST',
     body: JSON.stringify({ assignments })
