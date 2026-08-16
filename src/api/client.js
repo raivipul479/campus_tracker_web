@@ -93,10 +93,25 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(payment)
   }),
+  // Correcting a wrongly entered receipt. Both recompute the linked fee due
+  // server-side, so a deleted payment reopens its due.
+  updatePayment: (receiptId, changes) => request(`/payments/${encodeURIComponent(receiptId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes)
+  }),
+  deletePayment: receiptId => request(`/payments/${encodeURIComponent(receiptId)}`, {
+    method: 'DELETE'
+  }),
   getFeeDues: filters => request(`/fee-dues${queryString(filters)}`),
   generateFeeDues: payload => request('/fee-dues/generate', {
     method: 'POST',
     body: JSON.stringify(payload)
+  }),
+  // Sets discount / fine on a due. The server recomputes balance and status,
+  // so the amount owed reflects them immediately.
+  adjustFeeDue: (dueId, { discount, fine }) => request(`/fee-dues/${dueId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ discount, fine })
   }),
   getFeeSummary: filters => request(`/fee-dues/summary${queryString(filters)}`),
   getFeeReport: filters => request(`/fee-dues/report${queryString(filters)}`),

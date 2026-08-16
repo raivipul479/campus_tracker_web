@@ -10,9 +10,23 @@ export const initialsFor = name => {
   return text.split(' ').filter(Boolean).map(part => part[0]).join('').slice(0, 2).toUpperCase();
 };
 
-export const currentMonthLabel = () => new Date().toLocaleString('en-IN', { month: 'short', year: 'numeric' });
+// Fees are billed per quarter, so the billing period key is the quarter the
+// date falls in — "2026-Q3" — matching the keys the backend generates.
+export const currentMonthLabel = () => {
+  const now = new Date();
+  return `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`;
+};
 
-export const currentMonthKey = () => `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+export const currentMonthKey = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
+};
+
+export const quarterKeyForDate = value => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-Q${Math.floor(date.getMonth() / 3) + 1}`;
+};
 
 export const parseAmount = value => Number(String(value || '').replace(/[^0-9.]/g, '')) || 0;
 

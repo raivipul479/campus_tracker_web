@@ -8,7 +8,7 @@ import { AdimoveLogo } from '../components/AdimoveLogo.jsx';
 import { useDebouncedEffect } from '../hooks/useDebouncedEffect.js';
 import { campusService as api } from '../services/campusService.js';
 import { clearStoredSession, getStoredSession, SESSION_EXPIRED_EVENT, setStoredSession } from '../api/client.js';
-import { amountsEqual, currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, parseAmount, roundToPaise, safeText } from '../utils/formatters.js';
+import { amountsEqual, currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, parseAmount, quarterKeyForDate, roundToPaise, safeText } from '../utils/formatters.js';
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 let googleMapsPromise;
@@ -939,6 +939,11 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
       if (field.digitsOnly && field.maxLength === 10) {
         return [field.name, stripToLast10Digits(value)];
       }
+      // Yes/No selects are backed by real booleans on the API, which would
+      // match neither option and render the field blank.
+      if (field.type === 'select' && field.options?.includes('Yes') && typeof value === 'boolean') {
+        return [field.name, value ? 'Yes' : 'No'];
+      }
       return [field.name, field.name === 'vehicle' && value === 'Unassigned' ? 'Not assigned' : value];
     })));
     setFormError('');
@@ -1036,16 +1041,16 @@ const personCell = key => ({
   }
 });
 const statusCell = key => ({ key, label: key[0].toUpperCase()+key.slice(1), render: r => <Pill>{r[key]}</Pill> });
+// Returns the billing period a payment falls in. Now a quarter key, so it
+// still compares against currentMonthKey() — returning YYYY-MM here would
+// never match and the "Collected" figure would silently read zero.
 const monthKeyForPayment = payment => {
   const rawDate = String(payment.date || '').trim();
   const parsed = rawDate ? new Date(rawDate) : null;
-  if (parsed && !Number.isNaN(parsed.getTime())) {
-    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
-  }
+  if (parsed && !Number.isNaN(parsed.getTime())) return quarterKeyForDate(parsed);
   const label = rawDate.match(/\b([A-Z][a-z]{2,8})\s+(\d{4})\b/);
   if (!label) return '';
-  const month = new Date(`${label[1]} 1, ${label[2]}`);
-  return Number.isNaN(month.getTime()) ? '' : `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
+  return quarterKeyForDate(new Date(`${label[1]} 1, ${label[2]}`));
 };
 const settledPaymentRows = payments => payments.filter(payment =>
   ['Paid', 'Collected'].includes(payment.status) && monthKeyForPayment(payment) === currentMonthKey()
@@ -1063,6 +1068,11 @@ const monthlyDueRows = feeDues => feeDues
     method: '-',
     status: due.status
   }));
+// How many quarterly dues each plan covers. Must stay in step with
+// PLAN_QUARTERS in the backend's payment.service.ts.
+const PLAN_QUARTERS = { quarterly: 1, 'half-yearly': 2, annual: 4 };
+const quartersFor = values => PLAN_QUARTERS[String(values.plan || 'Quarterly').toLowerCase()] ?? 1;
+
 const currentMonthDueForStudent = (feeDues, studentId) => studentId
   ? feeDues.find(item => Number(item.studentId) === studentId && item.month === currentMonthKey()) || null
   : null;
@@ -1144,6 +1154,12 @@ const studentFields = [
   { name: 'class', label: 'Class', required: true, maxLength: 80 },
   { name: 'section', label: 'Section', placeholder: 'A', maxLength: 16 },
   { name: 'guardianName', label: "Father's / Mother's name", maxLength: 160 },
+  // No '' entry here — the select always renders its own "Select" placeholder
+  // with an empty value, which doubles as the way to clear the branch.
+  { name: 'branch', label: 'Branch', type: 'select', options: ['JPC', 'JPIC'], required: true },
+  // On hold hides the student from the driver's roster and blocks pickup/drop
+  // logging for them. Admin and parent views are unaffected.
+  { name: 'onHold', label: 'On hold', type: 'select', options: ['No', 'Yes'], defaultValue: 'No' },
   { name: 'kms', label: 'Kms', type: 'number', min: '0', max: '500', step: '0.01', inputMode: 'decimal' },
   { name: 'tagNo', label: 'Tag No.', required: true, placeholder: 'T-A', maxLength: 32 },
   { name: 'area', label: 'Area', required: true, minLength: 2, maxLength: 180 },
@@ -1154,8 +1170,15 @@ const studentFields = [
 ];
 const paymentFields = [
   { name: 'student', label: 'Student', type: 'select', options: [], required: true },
-  { name: 'plan', label: 'Fee plan', type: 'select', options: ['Monthly', 'Quarterly', 'Half-yearly', 'Annual'], required: true, defaultValue: 'Monthly' },
+  { name: 'plan', label: 'Fee plan', type: 'select', options: ['Quarterly', 'Half-yearly', 'Annual'], required: true, defaultValue: 'Quarterly' },
   { name: 'paymentType', label: 'Payment type', type: 'select', options: ['Full payment', 'Partial payment'], required: true, defaultValue: 'Full payment' },
+  // Both are written onto the fee due, which recomputes its own balance:
+  // total = base + fine - discount. Discount reduces what is owed, penalty
+  // increases it.
+  // digitsOnly strips anything non-numeric as it is typed, so these accept
+  // whole rupees only — no decimals, no minus sign.
+  { name: 'discount', label: 'Discount', placeholder: '0', pattern: '[0-9]*', inputMode: 'numeric', digitsOnly: true, maxLength: 8 },
+  { name: 'penalty', label: 'Penalty / late fine', placeholder: '0', pattern: '[0-9]*', inputMode: 'numeric', digitsOnly: true, maxLength: 8 },
   { name: 'amount', label: 'Amount', required: true, placeholder: '8400', pattern: '[0-9]+(\\.[0-9]{1,2})?', inputMode: 'decimal', title: 'Enter a positive amount with up to 2 decimal places' },
   { name: 'date', label: 'Payment / due date', type: 'date', required: true },
   { name: 'method', label: 'Method', type: 'select', options: ['UPI', 'Card', 'Cash', 'Bank transfer', '-'], required: true },
@@ -1172,7 +1195,7 @@ const documentFields = [
 
 function VehiclesPage({ vehicles, routes, filters, onFiltersChange, onAdd, onEdit, loading }) {
   const vehicleRows = vehicles.map(vehicle => ({ ...vehicle, compliance: complianceStatusForVehicle(vehicle) }));
-  const columns = [{key:'id',label:'Vehicle',render:r=><div className="vehicle-cell"><span className={`vehicle-tile ${r.tone}`}><Icon name="bus"/></span><div><strong>{r.id}</strong><small>{r.plate}</small></div></div>},{key:'vehicleType',label:'Type',render:r=>dash(r.vehicleType)},{key:'driver',label:'Driver'},{key:'students',label:'Students'},{key:'speed',label:'Current speed',render:r=>r.speed?`${r.speed} km/h`:'—'},statusCell('status'),{key:'compliance',label:'Compliance',render:r=><Pill tone={complianceTone(r.compliance)}>{r.compliance}</Pill>}];
+  const columns = [{key:'id',label:'Vehicle',render:r=><div className="vehicle-cell"><span className={`vehicle-tile ${r.tone}`}><Icon name="bus"/></span><div><strong>{r.id}</strong><small>{r.plate}</small></div></div>},{key:'vehicleType',label:'Type',render:r=>dash(r.vehicleType)},{key:'driver',label:'Driver'},{key:'students',label:'Students'},{key:'seatingCapacity',label:'Seating capacity',render:r=>dash(r.seatingCapacity)},{key:'speed',label:'Current speed',render:r=>r.speed?`${r.speed} km/h`:'—'},statusCell('status'),{key:'compliance',label:'Compliance',render:r=><Pill tone={complianceTone(r.compliance)}>{r.compliance}</Pill>}];
   const { history, openHistory, closeHistory } = useAssignmentHistory(
     row => api.getVehicleAssignmentHistory(row.vehicleId),
     item => ({ id: item.id, label: item.driverName, sublabel: item.route ? `Route: ${item.route}` : undefined, from: item.assignedAt, to: item.unassignedAt })
@@ -1235,6 +1258,8 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
     {...personCell('name'), label:'Student name'},
     {key:'class',label:'Class'},
     {key:'section',label:'Section',render:r=>dash(r.section)},
+    {key:'branch',label:'Branch',render:r=>r.branch?<Pill tone="blue">{r.branch}</Pill>:dash('')},
+    {key:'onHold',label:'Status',render:r=>r.onHold?<Pill tone="amber">On hold</Pill>:<Pill tone="green">Active</Pill>},
     {key:'guardianName',label:"Father's / Mother's name",render:r=>dash(r.guardianName)},
     {key:'kms',label:'Kms',render:r=>dash(r.kms)},
     {key:'tagNo',label:'Tag No.',render:r=><Pill tone="blue">{r.tagNo}</Pill>},
@@ -1336,7 +1361,7 @@ const studentIdFromSelection = selection => {
   return match ? Number(match[1]) : null;
 };
 
-function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRemindAll }) {
+function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, onGenerateDues, onRemindAll }) {
   const [showReport, setShowReport] = useState(false);
   const dues = monthlyDueRows(feeDues);
   const rows = [...dues, ...payments];
@@ -1347,10 +1372,18 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRe
   const findStudent = studentId => studentId
     ? students.find(item => Number(item.studentId || item.id) === studentId) || null
     : null;
-  const isMonthlyPlan = values => String(values.plan || 'Monthly').toLowerCase() === 'monthly';
+  // A route's fee is one quarter's charge, so the plan is a straight multiple
+  // of it. This previously returned 0 for anything but Monthly, which is why
+  // Quarterly, Half-yearly and Annual never calculated an amount.
+  const isMonthlyPlan = values => quartersFor(values) === 1;
+  // Mirrors the server's balance formula: base + fine - discount, with the
+  // base scaled by however many quarters the plan covers. Never goes negative,
+  // so an over-large discount settles the due rather than owing money back.
   const dueAmountFor = values => {
-    if (!isMonthlyPlan(values)) return 0;
-    return totalDueForStudent(feeDues, findStudent(studentIdFromSelection(values.student)));
+    const base = totalDueForStudent(feeDues, findStudent(studentIdFromSelection(values.student)));
+    const gross = base * quartersFor(values);
+    const total = gross + parseAmount(values.penalty) - parseAmount(values.discount);
+    return Math.max(0, roundToPaise(total));
   };
   const fields = values => paymentFields.map(field => {
     if (field.name === 'student') {
@@ -1370,7 +1403,7 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRe
     return field;
   });
   const deriveValues = (changedField, values) => {
-    if (!['student', 'paymentType', 'plan'].includes(changedField)) return values;
+    if (!['student', 'paymentType', 'plan', 'discount', 'penalty'].includes(changedField)) return values;
     const totalDue = dueAmountFor(values);
     if (!totalDue) return values;
     const isFullPayment = (values.paymentType || 'Full payment') === 'Full payment';
@@ -1386,7 +1419,7 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRe
 
   const dueSummary = <section className="stats-grid compact"><StatCard label="Monthly billed" value={formatCurrency(totalBilled)} change={currentMonthLabel()} detail="route fees" icon="money" tone="blue"/><StatCard label="Pending dues" value={formatCurrency(totalPending)} change={`${dues.length}`} detail="students" icon="clock" tone="amber"/><StatCard label="Collected" value={formatCurrency(totalCollected)} change={`${settledPayments.length}`} detail="receipts" icon="check" tone="green"/><StatCard label="Settled" value={feeDues.filter(due => due.status === 'Paid' || due.status === 'Waived').length} change="Ledger" detail="students" icon="check" tone="green"/></section>;
   const columns = [{key:'id',label:'Receipt ID',render:r=><strong>{r.id}</strong>},{key:'student',label:'Student'},{key:'plan',label:'Fee plan'},{key:'amount',label:'Amount',render:r=><strong>{r.amount}</strong>},{key:'date',label:'Payment / due date'},{key:'method',label:'Method'},statusCell('status')];
-  return <DataPage type="Payment history" data={rows} columns={columns} subtitle={`${dues.length} monthly route fee dues pending after received payments`} action="Record payment" fields={fields} deriveValues={deriveValues} onAdd={onAdd} createRecord={async values => {
+  return <DataPage type="Payment history" data={rows} columns={columns} subtitle={`${dues.length} quarterly route fee dues pending after received payments`} action="Record payment" fields={fields} deriveValues={deriveValues} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} createRecord={async values => {
     const studentId = studentIdFromSelection(values.student);
     const student = findStudent(studentId);
     const amount = Number(values.amount || 0);
@@ -1402,6 +1435,18 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRe
       due = refreshed.find(item => Number(item.studentId) === studentId) || null;
     }
 
+    // Write any discount / penalty onto the due first. The server recomputes
+    // base + fine - discount, so every check below runs against the adjusted
+    // balance rather than the original one.
+    const discountValue = parseAmount(values.discount);
+    const penaltyValue = parseAmount(values.penalty);
+    if (due && (discountValue > 0 || penaltyValue > 0)) {
+      const dueId = due.dueId || due.id;
+      due = await api.adjustFeeDue(dueId, { discount: discountValue, fine: penaltyValue });
+    } else if (!due && (discountValue > 0 || penaltyValue > 0)) {
+      throw new Error('A discount or penalty can only be applied against a generated fee due. Generate dues for this student first.');
+    }
+
     if (due) {
       const balance = roundToPaise(due.balance);
       if (balance <= 0) {
@@ -1415,7 +1460,8 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onGenerateDues, onRe
         throw new Error(`Partial payment must be less than the total due (${formatCurrency(balance)}).`);
       }
     }
-    const { paymentType, ...rest } = values;
+    // discount / penalty live on the fee due, not on the payment row.
+    const { paymentType, discount, penalty, ...rest } = values;
     return {
       ...rest,
       student: student?.name || values.student,
@@ -2046,7 +2092,12 @@ export default function AdminApp() {
   if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle} loading={tableLoading.vehicles}/>;
   if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver} loading={tableLoading.drivers}/>;
   if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} onImported={refreshCoreData} loading={tableLoading.students}/>;
-  if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }}/>;
+  if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }} onEdit={async record => {
+    // Only these four are correctable; the student and the due a receipt is
+    // linked to are not, so a misassigned payment must be deleted and re-posted.
+    await api.updatePayment(record.id, { amount: parseAmount(record.amount), status: record.status, method: record.method, date: record.date });
+    await refreshCoreData();
+  }} onDelete={async record => { await api.deletePayment(record.id); await refreshCoreData(); }}/>;
   if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
   if(active==='Notifications') content=<NotificationsPage students={students} feeDues={feeDues} onRemindStudent={async ({ studentId }) => api.sendFeeReminder({ studentId })} onRemindAll={async () => api.sendFeeReminder({ all: true })}/>;
   if(active==='Settings') content=<SettingsPage/>;
