@@ -140,3 +140,12 @@ button:disabled .spinner{opacity:.85}
 .import-progress-bar{height:8px;border-radius:999px;background:#e6edf3;overflow:hidden}
 .import-progress-bar span{display:block;height:100%;background:var(--brand);
   border-radius:999px;transition:width .25s ease}
+
+/* Attendance report */
+.attendance-screen{display:flex;flex-direction:column;gap:12px}
+.panel-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.filter-btn.active{border-color:var(--brand);background:#ecf8f2;color:#176747}
+.pill.red{background:#fdeaea;color:#c93f3f}
+.attendance-screen .report-filters{grid-template-columns:repeat(3,minmax(150px,1fr))}
+.attendance-screen .report-table table{min-width:960px}
+.attendance-screen .api-banner{margin:14px 18px 0}

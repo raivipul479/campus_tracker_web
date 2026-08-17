@@ -115,6 +115,8 @@ export const api = {
   }),
   getFeeSummary: filters => request(`/fee-dues/summary${queryString(filters)}`),
   getFeeReport: filters => request(`/fee-dues/report${queryString(filters)}`),
+  getStudentAttendance: filters => request(`/attendance/students${queryString(filters)}`),
+  getDriverAttendance: filters => request(`/attendance/drivers${queryString(filters)}`),
   sendFeeReminder: payload => request('/notifications/fee-reminder', {
     method: 'POST',
     body: JSON.stringify(payload)

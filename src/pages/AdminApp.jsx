@@ -70,7 +70,7 @@ const Icon = ({ name, size = 19 }) => {
 
 const nav = [
   ['Overview', 'grid'], ['Live tracking', 'pin'], ['Routes', 'route'], ['Vehicles', 'bus'], ['Drivers', 'users'],
-  ['Students', 'student'], ['Fees & payments', 'money'], ['Documents', 'file'], ['Notifications', 'bell']
+  ['Students', 'student'], ['Fees & payments', 'money'], ['Attendance', 'check'], ['Documents', 'file'], ['Notifications', 'bell']
 ];
 
 const SCHOOL_LOCATION = { lat: 26.9124, lng: 75.7873 };
@@ -1356,6 +1356,167 @@ function FeeReport({ rows, students, onBack }) {
   </section>;
 }
 
+const monthInputValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+const monthLabel = key => {
+  const match = String(key || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return key || '-';
+  return new Date(Number(match[1]), Number(match[2]) - 1, 1)
+    .toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+};
+
+// Quoted so names containing commas survive the round trip into Excel.
+const csvCell = value => {
+  const text = String(value ?? '');
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+const downloadCsv = (filename, headers, rows) => {
+  const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+  // BOM so Excel reads it as UTF-8 rather than the local codepage.
+  const url = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const attendanceTone = pct => (pct >= 85 ? 'green' : pct >= 60 ? 'amber' : 'red');
+
+function AttendancePage({ routes }) {
+  const [mode, setMode] = useState('students');
+  const [month, setMonth] = useState(monthInputValue(new Date()));
+  const [route, setRoute] = useState('all');
+  const [query, setQuery] = useState('');
+  const [report, setReport] = useState(null);
+  const [state, setState] = useState({ loading: true, error: '' });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, error: '' });
+    const filters = mode === 'students'
+      ? { month, ...(route !== 'all' ? { routeId: route } : {}) }
+      : { month };
+    const load = mode === 'students' ? api.getStudentAttendance(filters) : api.getDriverAttendance(filters);
+    load
+      .then(data => { if (!cancelled) { setReport(data); setState({ loading: false, error: '' }); } })
+      .catch(error => { if (!cancelled) { setReport(null); setState({ loading: false, error: error.message }); } });
+    return () => { cancelled = true; };
+  }, [mode, month, route]);
+
+  const rows = useMemo(() => {
+    const all = report?.rows || [];
+    const text = query.trim().toLowerCase();
+    if (!text) return all;
+    return all.filter(row => [row.student, row.driver, row.regNo, row.phone, row.route, row.vehicle, row.class]
+      .some(field => String(field || '').toLowerCase().includes(text)));
+  }, [report, query]);
+
+  const operatingDays = report?.operatingDays || 0;
+  // Averaged over the listed people, so filtering the list re-averages it.
+  const averagePct = rows.length
+    ? Math.round(rows.reduce((sum, row) => sum + (row.attendancePct || 0), 0) / rows.length)
+    : 0;
+  const fullAttendance = operatingDays ? rows.filter(row => row.presentDays === operatingDays).length : 0;
+  const neverPresent = rows.filter(row => !row.presentDays).length;
+
+  const exportCsv = () => {
+    if (mode === 'students') {
+      downloadCsv(
+        `student-attendance-${month}.csv`,
+        ['Reg no', 'Student', 'Class', 'Branch', 'Route', 'Present days', 'Absent days', 'Operating days', 'Attendance %', 'Pickups', 'Drops', 'On hold'],
+        rows.map(row => [row.regNo, row.student, row.class, row.branch, row.route, row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.pickups, row.drops, row.onHold ? 'Yes' : 'No'])
+      );
+      return;
+    }
+    downloadCsv(
+      `driver-attendance-${month}.csv`,
+      ['Driver', 'Phone', 'Vehicle', 'Status', 'Days active', 'Days absent', 'Operating days', 'Attendance %', 'Trips logged', 'Students handled'],
+      rows.map(row => [row.driver, row.phone, row.vehicle, row.status, row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.trips, row.studentsHandled])
+    );
+  };
+
+  return <section className="attendance-screen">
+    <section className="stats-grid compact">
+      <StatCard label="Operating days" value={operatingDays} change={monthLabel(report?.month || month)} detail="days transport ran" icon="clock" tone="blue"/>
+      <StatCard label={mode === 'students' ? 'Students' : 'Drivers'} value={rows.length} change="Listed" detail="in this view" icon={mode === 'students' ? 'student' : 'users'} tone="blue"/>
+      <StatCard label="Average attendance" value={`${averagePct}%`} change={`${fullAttendance} full`} detail="of operating days" icon="check" tone={attendanceTone(averagePct)}/>
+      <StatCard label="No activity" value={neverPresent} change="Zero days" detail={mode === 'students' ? 'students' : 'drivers'} icon="alert" tone={neverPresent ? 'amber' : 'green'}/>
+    </section>
+
+    <div className="panel fee-report">
+      <div className="panel-head">
+        <div>
+          <h2>{mode === 'students' ? 'Student' : 'Driver'} monthly attendance</h2>
+          <p>Built from pickup and drop logs — a day counts as present when transport was logged that day</p>
+        </div>
+        <div className="panel-actions">
+          <button type="button" className={`filter-btn ${mode === 'students' ? 'active' : ''}`} onClick={() => setMode('students')}><Icon name="student" size={15}/>Students</button>
+          <button type="button" className={`filter-btn ${mode === 'drivers' ? 'active' : ''}`} onClick={() => setMode('drivers')}><Icon name="users" size={15}/>Drivers</button>
+          <button type="button" className="filter-btn" onClick={exportCsv} disabled={!rows.length}><Icon name="upload" size={15}/>Export CSV</button>
+        </div>
+      </div>
+
+      <div className="report-filters">
+        <label><span>Month</span><input type="month" value={month} onChange={event => setMonth(event.target.value)}/></label>
+        {mode === 'students' && <label><span>Route</span><select value={route} onChange={event => setRoute(event.target.value)}>
+          <option value="all">All routes</option>
+          {routes.map(item => <option key={item.id} value={item.id}>{item.id}{item.name ? ` \u2014 ${item.name}` : ''}</option>)}
+        </select></label>}
+        <label><span>Search</span><input type="search" placeholder={mode === 'students' ? 'Name, reg no, class' : 'Name, phone, vehicle'} value={query} onChange={event => setQuery(event.target.value)}/></label>
+      </div>
+
+      {state.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{state.error}</span></div>}
+
+      {!state.loading && !state.error && !operatingDays && <div className="empty small-empty">
+        No transport was logged in {monthLabel(month)}, so there is nothing to report for this month.
+      </div>}
+
+      {mode === 'drivers' && report?.unattributedLogs > 0 && <div className="api-banner muted">
+        <Icon name="alert" size={17}/>
+        <span>{report.unattributedLogs} log(s) this month have no driver recorded and are not counted against anyone. Logs only carry a driver from the point that change was deployed.</span>
+      </div>}
+
+      <div className="report-table">
+        <table>
+          <thead>{mode === 'students'
+            ? <tr><th>Reg no</th><th>Student</th><th>Class</th><th>Route</th><th>Present</th><th>Absent</th><th>Attendance</th><th>Pickups</th><th>Drops</th><th>Last seen</th></tr>
+            : <tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Days active</th><th>Days absent</th><th>Attendance</th><th>Trips</th><th>Students</th><th>Last seen</th></tr>}
+          </thead>
+          <tbody>{mode === 'students'
+            ? rows.map(row => <tr key={row.studentId}>
+                <td>{dash(row.regNo)}</td>
+                <td><strong>{row.student}</strong>{row.onHold ? <> <Pill tone="amber">On hold</Pill></> : null}</td>
+                <td>{dash(row.class)}</td>
+                <td>{dash(row.route)}</td>
+                <td><strong>{row.presentDays}</strong> / {operatingDays}</td>
+                <td>{row.onHold ? '-' : row.absentDays}</td>
+                <td><Pill tone={attendanceTone(row.attendancePct)}>{row.attendancePct}%</Pill></td>
+                <td>{row.pickups}</td>
+                <td>{row.drops}</td>
+                <td>{row.lastSeen ? formatHistoryDate(row.lastSeen) : '-'}</td>
+              </tr>)
+            : rows.map(row => <tr key={row.driverId}>
+                <td><strong>{row.driver}</strong></td>
+                <td>{dash(row.phone)}</td>
+                <td>{dash(row.vehicle)}</td>
+                <td><strong>{row.presentDays}</strong> / {operatingDays}</td>
+                <td>{row.absentDays}</td>
+                <td><Pill tone={attendanceTone(row.attendancePct)}>{row.attendancePct}%</Pill></td>
+                <td>{row.trips}</td>
+                <td>{row.studentsHandled}</td>
+                <td>{row.lastSeen ? formatHistoryDate(row.lastSeen) : '-'}</td>
+              </tr>)}
+          </tbody>
+        </table>
+        {state.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading attendance...</div>}
+        {!state.loading && !state.error && operatingDays > 0 && !rows.length && <div className="empty small-empty">No one matches this filter.</div>}
+      </div>
+    </div>
+  </section>;
+}
+
 const studentIdFromSelection = selection => {
   const match = String(selection || '').match(/#(\d+)$/);
   return match ? Number(match[1]) : null;
@@ -1418,7 +1579,7 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, on
   }
 
   const dueSummary = <section className="stats-grid compact"><StatCard label="Monthly billed" value={formatCurrency(totalBilled)} change={currentMonthLabel()} detail="route fees" icon="money" tone="blue"/><StatCard label="Pending dues" value={formatCurrency(totalPending)} change={`${dues.length}`} detail="students" icon="clock" tone="amber"/><StatCard label="Collected" value={formatCurrency(totalCollected)} change={`${settledPayments.length}`} detail="receipts" icon="check" tone="green"/><StatCard label="Settled" value={feeDues.filter(due => due.status === 'Paid' || due.status === 'Waived').length} change="Ledger" detail="students" icon="check" tone="green"/></section>;
-  const columns = [{key:'id',label:'Receipt ID',render:r=><strong>{r.id}</strong>},{key:'student',label:'Student'},{key:'plan',label:'Fee plan'},{key:'amount',label:'Amount',render:r=><strong>{r.amount}</strong>},{key:'date',label:'Payment / due date'},{key:'method',label:'Method'},statusCell('status')];
+  const columns = [{key:'id',label:'Receipt ID',render:r=><strong>{r.id}</strong>},{key:'student',label:'Student'},{key:'plan',label:'Fee plan'},{key:'amount',label:'Amount',render:r=><strong>{r.amount}</strong>},{key:'date',label:'Payment / due date'},{key:'method',label:'Method'},statusCell('status'),{key:'createdAt',label:'Created',render:r=>formatHistoryDate(r.createdAt)}];
   return <DataPage type="Payment history" data={rows} columns={columns} subtitle={`${dues.length} quarterly route fee dues pending after received payments`} action="Record payment" fields={fields} deriveValues={deriveValues} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} createRecord={async values => {
     const studentId = studentIdFromSelection(values.student);
     const student = findStudent(studentId);
@@ -2098,6 +2259,7 @@ export default function AdminApp() {
     await api.updatePayment(record.id, { amount: parseAmount(record.amount), status: record.status, method: record.method, date: record.date });
     await refreshCoreData();
   }} onDelete={async record => { await api.deletePayment(record.id); await refreshCoreData(); }}/>;
+  if(active==='Attendance') content=<AttendancePage routes={routes}/>;
   if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
   if(active==='Notifications') content=<NotificationsPage students={students} feeDues={feeDues} onRemindStudent={async ({ studentId }) => api.sendFeeReminder({ studentId })} onRemindAll={async () => api.sendFeeReminder({ all: true })}/>;
   if(active==='Settings') content=<SettingsPage/>;
