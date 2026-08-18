@@ -117,6 +117,9 @@ export const api = {
   getFeeReport: filters => request(`/fee-dues/report${queryString(filters)}`),
   getStudentAttendance: filters => request(`/attendance/students${queryString(filters)}`),
   getDriverAttendance: filters => request(`/attendance/drivers${queryString(filters)}`),
+  // Raw pickup/drop logs. The attendance drill-down uses these to put times
+  // against each day, since the monthly report only carries the dates.
+  getTransportLogs: filters => request(`/transport-logs${queryString(filters)}`),
   sendFeeReminder: payload => request('/notifications/fee-reminder', {
     method: 'POST',
     body: JSON.stringify(payload)

@@ -185,11 +185,86 @@ function SearchableSelect({ field, value, onChange }) {
   </div>;
 }
 
+// The ladder the transport sheet uses. Offered as one click because every route
+// has the same shape and only the prices differ.
+const STANDARD_SLABS = [[1, 10], [11, 20], [21, 30]];
+
+const slabLabel = slab => `${slab.minKm}-${slab.maxKm} km · ${formatCurrency(slab.fee)}`;
+
+// The slab select is valued by slab id. Undefined lets the server pick when a
+// route has a single slab, and reject the ambiguity when it has several.
+const slabIdFrom = value => {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+};
+
+// Slab options for whichever route is currently picked in a form.
+const slabOptionsForRoute = (routes, routeCode) => {
+  const route = routes.find(item => item.id === routeCode);
+  return (route?.slabs ?? []).map(slab => ({ value: String(slab.slabId), label: slabLabel(slab) }));
+};
+
+/**
+ * Distance slabs of one route.
+ *
+ * The route stays a single row — B-10 is B-10, one bus and one roster. These are
+ * the bands it is priced in; a student is assigned to the route AND to one of
+ * these, and the slab is what decides their fee.
+ */
+function FeeSlabEditor({ value, onChange }) {
+  const slabs = Array.isArray(value) ? value : [];
+
+  const update = (index, key, next) => onChange(slabs.map((slab, position) => (
+    position === index ? { ...slab, [key]: next } : slab
+  )));
+  const remove = index => onChange(slabs.filter((slab, position) => position !== index));
+  const add = () => {
+    const last = slabs[slabs.length - 1];
+    const minKm = last ? Number(last.maxKm || 0) + 1 : 1;
+    onChange([...slabs, { minKm, maxKm: minKm + 9, fee: '' }]);
+  };
+  // Keeps any price already typed against a slab with the same starting km, so
+  // filling the standard ladder is not destructive.
+  const fillStandard = () => onChange(STANDARD_SLABS.map(([minKm, maxKm]) => {
+    const existing = slabs.find(slab => Number(slab.minKm) === minKm);
+    return existing ? { ...existing, maxKm } : { minKm, maxKm, fee: '' };
+  }));
+
+  return <div className="slab-editor">
+    {slabs.length > 0 && <div className="slab-rows">
+      <div className="slab-row slab-head"><span>From km</span><span>To km</span><span>Fee</span><span/></div>
+      {slabs.map((slab, index) => <div className="slab-row" key={index}>
+        <input type="number" min="0" max="1000" step="0.01" inputMode="decimal" value={slab.minKm ?? ''}
+          onChange={event => update(index, 'minKm', event.target.value)} aria-label={`Slab ${index + 1} from km`}/>
+        <input type="number" min="0" max="1000" step="0.01" inputMode="decimal" value={slab.maxKm ?? ''}
+          onChange={event => update(index, 'maxKm', event.target.value)} aria-label={`Slab ${index + 1} to km`}/>
+        <input type="number" min="0" max="99999999.99" step="0.01" inputMode="decimal" value={slab.fee ?? ''}
+          onChange={event => update(index, 'fee', event.target.value)} aria-label={`Slab ${index + 1} fee`}/>
+        <button type="button" className="icon-btn slab-remove" onClick={() => remove(index)} title="Remove this slab">
+          <Icon name="close" size={14}/>
+        </button>
+      </div>)}
+    </div>}
+
+    {!slabs.length && <p className="slab-empty">
+      No distance slabs — every student on this route is billed the flat fee above.
+    </p>}
+
+    <div className="slab-actions">
+      <button type="button" className="filter-btn" onClick={add}><Icon name="plus" size={14}/>Add slab</button>
+      <button type="button" className="filter-btn" onClick={fillStandard}>Use 1-30 km slabs</button>
+      {slabs.length > 0 && <button type="button" className="filter-btn" onClick={() => onChange([])}>Clear</button>}
+    </div>
+  </div>;
+}
+
 function RecordModal({ title, fields, values, setValues, onClose, onSubmit, saving = false, error = '', deriveValues }) {
-  const updateField = (field, rawValue) => {
-    const value = field.digitsOnly ? rawValue.replace(/\D/g, '') : rawValue;
+  const setFieldValue = (field, value) => {
     const nextValues = { ...values, [field.name]: value };
     setValues(deriveValues ? deriveValues(field.name, nextValues) : nextValues);
+  };
+  const updateField = (field, rawValue) => {
+    setFieldValue(field, field.digitsOnly ? rawValue.replace(/\D/g, '') : rawValue);
   };
   return <div className="modal-backdrop" onClick={onClose}>
     <form className="record-modal" onSubmit={onSubmit} onClick={event => event.stopPropagation()}>
@@ -201,14 +276,26 @@ function RecordModal({ title, fields, values, setValues, onClose, onSubmit, savi
         <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
       </div>
       <div className="form-grid">
-        {fields.map(field => <label key={field.name} className={field.full ? 'full' : ''}>
+        {fields.map(field => field.type === 'slabs'
+          ? <div key={field.name} className="full slab-field">
+              <span className="slab-field-label">{field.label}</span>
+              <FeeSlabEditor value={values[field.name]} onChange={next => setFieldValue(field, next)}/>
+              {field.hint && <small className="field-hint">{field.hint}</small>}
+            </div>
+          : <label key={field.name} className={field.full ? 'full' : ''}>
           <span>{field.label}{field.required && <em className="required-star"> *</em>}</span>
           {field.type === 'select'
             ? field.searchable
               ? <SearchableSelect field={field} value={values[field.name] || ''} onChange={value => updateField(field, value)}/>
               : <select value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required} disabled={field.readOnly}>
                   <option value="">Select</option>
-                  {field.options.map(option => <option key={option} value={option}>{option}</option>)}
+                  {/* Grouped options render the route hierarchy: parent runs as
+                      headings, their distance bands as the selectable rows. */}
+                  {field.optionGroups
+                    ? field.optionGroups.map(group => <optgroup key={group.label} label={group.label}>
+                        {group.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </optgroup>)
+                    : field.options.map(option => <option key={option} value={option}>{option}</option>)}
                 </select>
             : field.type === 'textarea'
               ? <textarea value={values[field.name] || ''} onChange={event => updateField(field, event.target.value)} required={field.required} minLength={field.minLength} maxLength={field.maxLength} title={field.title}/>
@@ -217,6 +304,7 @@ function RecordModal({ title, fields, values, setValues, onClose, onSubmit, savi
         </label>)}
       </div>
       {error && <div className="form-error">{error}</div>}
+
       <div className="modal-actions">
         <button type="button" className="filter-btn" onClick={onClose} disabled={saving}>Cancel</button>
         <button type="submit" className="primary-btn" disabled={saving}>{saving ? <span className="spinner"/> : <Icon name="check" size={16}/>}{saving ? 'Saving...' : 'Save record'}</button>
@@ -542,9 +630,17 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
   const valueFor = student => {
     const id = studentKey(student);
     if (Object.prototype.hasOwnProperty.call(overrides, id)) return overrides[id];
-    return student.routeId ? String(student.routeId) : '';
+    return student.routeId ? `${student.routeId}:${student.slabId ?? ''}` : '';
   };
   const setSelection = (studentId, routeId) => setOverrides(current => ({ ...current, [studentId]: routeId }));
+  // "<routeId>:<slabId>" in one control — picking the route and the slab as two
+  // dropdowns per row would double the width of an already dense table.
+  const routeChoices = useMemo(() => routes.map(route => ({
+    route,
+    options: route.slabs?.length
+      ? route.slabs.map(slab => ({ value: `${route.routeId}:${slab.slabId}`, label: `${route.id} · ${slabLabel(slab)}` }))
+      : [{ value: `${route.routeId}:`, label: `${route.id} · ${route.name}` }]
+  })), [routes]);
 
   const visibleStudents = students.filter(student =>
     [student.name, student.area, student.address, student.guardianName, student.phone, student.class, student.section].map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())
@@ -555,9 +651,13 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
       .map(student => {
         const id = studentKey(student);
         const selected = valueFor(student);
-        return selected && Number(selected) !== Number(student.routeId || 0)
-          ? { studentId: Number(id), routeId: Number(selected) }
-          : null;
+        if (!selected) return null;
+        // Unchanged rows are skipped, including a slab-only change, which is how
+        // a student's fee is corrected without moving them off their bus.
+        const current = student.routeId ? `${student.routeId}:${student.slabId ?? ''}` : '';
+        if (selected === current) return null;
+        const [routeId, slabId] = selected.split(':');
+        return { studentId: Number(id), routeId: Number(routeId), ...(slabId ? { slabId: Number(slabId) } : {}) };
       })
       .filter(Boolean);
 
@@ -602,7 +702,11 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
               <span title={student.phone}>{student.phone}</span>
               <span><select value={valueFor(student)} onChange={event => setSelection(id, event.target.value)}>
                 <option value="">Not assigned</option>
-                {routes.map(route => <option key={route.routeId} value={route.routeId}>{route.id} · {route.name}</option>)}
+                {/* One row per route, or per slab where the route has them, so
+                    the fee is chosen at the same time as the bus. */}
+                {routeChoices.map(({ route, options }) => options.map(option =>
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select></span>
             </div>;
           })}
@@ -1134,10 +1238,13 @@ const vehicleFields = [
   { name: 'driver', label: 'Existing driver name', defaultValue: 'Unassigned', readOnly: true }
 ];
 const routeFields = [
-  { name: 'id', label: 'Route code', required: true, placeholder: 'RT-01', pattern: '[A-Za-z0-9][A-Za-z0-9-]*', minLength: 2, maxLength: 32, title: 'Start with a letter or number; letters, numbers, and hyphens only' },
+  // Spaces are allowed: the transport sheet codes the pre-primary run on a route
+  // as "B-19 PRE", and student import creates routes straight from those values.
+  { name: 'id', label: 'Route code', required: true, placeholder: 'RT-01', pattern: '[A-Za-z0-9][A-Za-z0-9 -]*', minLength: 2, maxLength: 32, title: 'Start with a letter or number; letters, numbers, spaces, and hyphens only' },
   { name: 'name', label: 'Route name', required: true, minLength: 2, maxLength: 120 },
-  { name: 'fee', label: 'Monthly fee', type: 'number', required: true, min: '0', max: '99999999.99', step: '0.01', inputMode: 'decimal' },
+  { name: 'fee', label: 'Flat fee', type: 'number', required: true, min: '0', max: '99999999.99', step: '0.01', inputMode: 'decimal', hint: 'Charged per quarter. Used only when this route has no distance slabs.' },
   { name: 'vehicle', label: 'Assigned bus', type: 'select', options: ['Not assigned'], defaultValue: 'Not assigned' },
+  { name: 'slabs', label: 'Distance slabs', type: 'slabs', defaultValue: [], hint: 'The route code stays the same. A student is assigned to this route and to one slab, and the slab sets their fee.' },
   { name: 'description', label: 'Description', type: 'textarea', full: true, maxLength: 255 }
 ];
 const driverFields = [
@@ -1166,7 +1273,10 @@ const studentFields = [
   { name: 'address', label: 'Address', type: 'textarea', full: true, maxLength: 255 },
   { name: 'phone', label: 'Phone number', required: true, pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
   { name: 'secondaryPhone', label: 'Secondary contact number', pattern: '[0-9]{10}', maxLength: 10, inputMode: 'numeric', digitsOnly: true, title: 'Enter a 10-digit phone number' },
-  { name: 'route', label: 'Route', type: 'select', options: [] }
+  { name: 'route', label: 'Route', type: 'select', options: [] },
+  // Options depend on the route picked above — StudentsPage supplies them per
+  // render. Left empty when the route has no slabs.
+  { name: 'slab', label: 'Distance slab', type: 'select', options: [], hint: 'Sets the fee for this student' }
 ];
 const paymentFields = [
   { name: 'student', label: 'Student', type: 'select', options: [], required: true },
@@ -1211,7 +1321,12 @@ function RoutesPage({ routes, vehicles, filters, onFiltersChange, onAdd, onEdit,
   const columns = [
     {key:'id',label:'Route',render:r=><strong>{r.id}</strong>},
     {key:'name',label:'Route name'},
-    {key:'fee',label:'Fee',render:r=><strong>{formatCurrency(r.fee)}</strong>},
+    // One code, its slabs listed underneath — the route is not split into rows.
+    {key:'fee',label:'Fee',render:r=>(r.slabs?.length
+      ? <div className="slab-cell">{r.slabs.map(slab => <span key={slab.slabId}>
+          <b>{slab.minKm}-{slab.maxKm} km</b>{formatCurrency(slab.fee)}
+        </span>)}</div>
+      : <strong>{formatCurrency(r.fee)}</strong>)},
     {key:'vehicle',label:'Assigned bus',render:r=><Pill tone={r.vehicle === 'Not assigned' ? 'gray' : 'blue'}>{r.vehicle}</Pill>},
     {key:'students',label:'Students'},
     {key:'description',label:'Description',render:r=>dash(r.description)}
@@ -1271,10 +1386,23 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
     {key:'phone',label:'Phone Number'},
     {key:'secondaryPhone',label:'Secondary contact',render:r=>dash(r.secondaryPhone)}
   ];
-  const fields = studentFields.map(field => field.name === 'route'
-    ? {...field, options: ['Not assigned', ...routes.map(route => route.id)], defaultValue: 'Not assigned'}
-    : field
-  );
+  // The slab list depends on the route currently selected in the form, so fields
+  // are built per render from the working values rather than once up front.
+  const fields = values => studentFields.map(field => {
+    if (field.name === 'route') {
+      return {...field, options: ['Not assigned', ...routes.map(route => route.id)], defaultValue: 'Not assigned'};
+    }
+    if (field.name === 'slab') {
+      const options = slabOptionsForRoute(routes, values?.route);
+      return {...field, options: [], optionGroups: options.length ? [{ label: 'Distance slabs', options }] : null,
+        readOnly: options.length === 0,
+        hint: options.length ? field.hint : 'This route has no distance slabs — the flat route fee applies'};
+    }
+    return field;
+  });
+  // Clearing the slab when the route changes stops a student keeping a slab that
+  // belongs to a route they are no longer on, which the API would reject anyway.
+  const deriveStudentValues = (changed, next) => (changed === 'route' ? {...next, slab: ''} : next);
   const { history, openHistory, closeHistory } = useAssignmentHistory(
     row => api.getStudentAssignmentHistory(row.studentId),
     item => ({
@@ -1285,7 +1413,7 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
       to: item.unassignedAt
     })
   );
-  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Import sheet', icon: 'upload', onClick: () => setImportOpen(true) }, { label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} deriveValues={deriveStudentValues} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Import sheet', icon: 'upload', onClick: () => setImportOpen(true) }, { label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal students={studentRows} routes={routes} onClose={() => setBulkOpen(false)} onSave={onBulkAssign}/>}{importOpen && <ImportStudentsModal onClose={() => setImportOpen(false)} onImported={onImported}/>}</DataPage>;
@@ -1382,7 +1510,209 @@ const downloadCsv = (filename, headers, rows) => {
   URL.revokeObjectURL(url);
 };
 
+// Real .xlsx rather than a CSV Excel has to guess at \u2014 dates stay dates and the
+// sheet opens without an import wizard. SheetJS is already a dependency for
+// student import and is ~350kB, so it stays lazily imported here too.
+const downloadXlsx = async (filename, sheetName, headers, rows) => {
+  const XLSX = await import('xlsx');
+  const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  // Excel refuses sheet names over 31 chars or containing []:*?/\
+  const safeName = String(sheetName).replace(/[[\]:*?/\\]/g, ' ').slice(0, 31) || 'Sheet1';
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, safeName);
+  XLSX.writeFile(book, filename);
+};
+
+// Every day of the month tagged with what happened to one person.
+//
+// Absence is only charged on days transport actually ran school-wide, which is
+// the same denominator the server uses \u2014 so a Sunday, or any day the buses
+// never moved, reads as "No transport" rather than inventing an absence. Dates
+// are built as plain strings from the month key to match the server, which
+// buckets logs on the UTC calendar date.
+const buildMonthDays = (monthKey, presentDates, operatingDates, onHold = false) => {
+  const match = String(monthKey || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return [];
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const present = new Set(presentDates || []);
+  const operating = new Set(operatingDates || []);
+  const dayCount = new Date(year, month, 0).getDate();
+
+  return Array.from({ length: dayCount }, (unused, index) => {
+    const day = index + 1;
+    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const status = present.has(date) ? 'Present'
+      : !operating.has(date) ? 'No transport'
+      : onHold ? 'On hold'
+      : 'Absent';
+    return {
+      date,
+      day,
+      weekday: new Date(year, month - 1, day).toLocaleDateString(undefined, { weekday: 'short' }),
+      status
+    };
+  });
+};
+
+const statusTone = status => (
+  status === 'Present' ? 'green' : status === 'Absent' ? 'red' : status === 'On hold' ? 'amber' : 'grey'
+);
+
+// Single-letter marks for the spreadsheet grid, where one column per day leaves
+// no room for words.
+const statusMark = status => (
+  status === 'Present' ? 'P' : status === 'Absent' ? 'A' : status === 'On hold' ? 'H' : '-'
+);
+
+const formatLogTime = value => new Date(value)
+  .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
 const attendanceTone = pct => (pct >= 85 ? 'green' : pct >= 60 ? 'amber' : 'red');
+
+/**
+ * Day-by-day attendance for one student or driver.
+ *
+ * The monthly report already says which dates the person was present, so the
+ * calendar renders immediately; the pickup and drop times are filled in from
+ * the raw logs once they arrive, and the day stays readable if that fetch fails.
+ */
+function AttendanceDetailModal({ mode, row, month, operatingDates, onClose }) {
+  const [logs, setLogs] = useState([]);
+  const [state, setState] = useState({ loading: true, error: '' });
+
+  const isStudent = mode === 'students';
+  const personId = isStudent ? row.studentId : row.driverId;
+  const name = isStudent ? row.student : row.driver;
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true, error: '' });
+    const [year, monthNo] = month.split('-').map(Number);
+    // The log filter is inclusive at both ends, so `to` is the last instant of
+    // the month rather than midnight on the 1st of the next one.
+    const from = new Date(Date.UTC(year, monthNo - 1, 1)).toISOString();
+    const to = new Date(Date.UTC(year, monthNo, 1) - 1).toISOString();
+    api.getTransportLogs({ ...(isStudent ? { studentId: personId } : { driverId: personId }), from, to })
+      .then(data => { if (!cancelled) { setLogs(data || []); setState({ loading: false, error: '' }); } })
+      .catch(error => { if (!cancelled) { setLogs([]); setState({ loading: false, error: error.message }); } });
+    return () => { cancelled = true; };
+  }, [mode, personId, month, isStudent]);
+
+  // Bucketed on the UTC date, matching how the server groups logs into days.
+  const byDate = useMemo(() => {
+    const map = new Map();
+    for (const log of logs) {
+      const key = String(log.recordedAt).slice(0, 10);
+      const entry = map.get(key) || { pickups: [], drops: [], students: new Set() };
+      (log.action === 'Pickup' ? entry.pickups : entry.drops).push(log.recordedAt);
+      entry.students.add(log.studentId);
+      map.set(key, entry);
+    }
+    return map;
+  }, [logs]);
+
+  const days = useMemo(
+    () => buildMonthDays(month, row.dates, operatingDates, isStudent && row.onHold),
+    [month, row.dates, operatingDates, isStudent, row.onHold]
+  );
+
+  // ISO strings sort chronologically, so first/last need no date parsing.
+  const detailFor = date => {
+    const entry = byDate.get(date);
+    if (!entry) return { first: '', last: '', trips: 0, students: 0 };
+    const times = [...entry.pickups, ...entry.drops].sort();
+    return {
+      first: isStudent
+        ? (entry.pickups.length ? formatLogTime(entry.pickups.slice().sort()[0]) : '')
+        : (times.length ? formatLogTime(times[0]) : ''),
+      last: isStudent
+        ? (entry.drops.length ? formatLogTime(entry.drops.slice().sort().pop()) : '')
+        : (times.length ? formatLogTime(times[times.length - 1]) : ''),
+      trips: times.length,
+      students: entry.students.size
+    };
+  };
+
+  const headers = isStudent
+    ? ['Date', 'Day', 'Status', 'Pickup', 'Drop', 'Logs']
+    : ['Date', 'Day', 'Status', 'First trip', 'Last trip', 'Trips', 'Students'];
+
+  const exportRows = () => days.map(entry => {
+    const detail = detailFor(entry.date);
+    return isStudent
+      ? [entry.date, entry.weekday, entry.status, detail.first, detail.last, detail.trips]
+      : [entry.date, entry.weekday, entry.status, detail.first, detail.last, detail.trips, detail.students];
+  });
+
+  const slug = String(name || personId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const baseName = `${isStudent ? 'student' : 'driver'}-attendance-${slug}-${month}`;
+
+  const exportCsv = () => downloadCsv(`${baseName}.csv`, headers, exportRows());
+  const exportExcel = () => downloadXlsx(`${baseName}.xlsx`, monthLabel(month), headers, exportRows());
+
+  const presentDays = days.filter(entry => entry.status === 'Present').length;
+  const absentDays = days.filter(entry => entry.status === 'Absent').length;
+
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="record-modal attendance-modal" onClick={event => event.stopPropagation()}>
+      <div className="modal-head">
+        <div>
+          <h2>{name}</h2>
+          <p>
+            {monthLabel(month)} — {presentDays} present, {absentDays} absent of {operatingDates.length} operating days
+            {isStudent
+              ? `${row.regNo ? ` · ${row.regNo}` : ''}${row.class ? ` · ${row.class}` : ''}${row.route ? ` · ${row.route}` : ''}`
+              : `${row.phone ? ` · ${row.phone}` : ''}${row.vehicle ? ` · ${row.vehicle}` : ''}`}
+          </p>
+        </div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
+      </div>
+
+      <div className="attendance-modal-actions">
+        <button type="button" className="filter-btn" onClick={exportCsv}><Icon name="upload" size={15}/>Export CSV</button>
+        <button type="button" className="filter-btn" onClick={exportExcel}><Icon name="upload" size={15}/>Export Excel</button>
+      </div>
+
+      {isStudent && row.onHold && <div className="api-banner muted">
+        <Icon name="alert" size={17}/>
+        <span>This student is on hold, so days without a log are not counted as absences.</span>
+      </div>}
+
+      {state.error && <div className="form-error">Times could not be loaded ({state.error}). Present and absent days are still accurate.</div>}
+
+      <div className="day-grid">
+        {days.map(entry => <div key={entry.date} className={`day-chip ${statusTone(entry.status)}`} title={`${entry.date} — ${entry.status}`}>
+          <strong>{entry.day}</strong>
+          <small>{entry.weekday}</small>
+        </div>)}
+      </div>
+
+      <div className="history-body">
+        <table className="history-table">
+          <thead><tr>{headers.map(header => <th key={header}>{header}</th>)}</tr></thead>
+          <tbody>{days.map(entry => {
+            const detail = detailFor(entry.date);
+            return <tr key={entry.date}>
+              <td>{entry.date}</td>
+              <td>{entry.weekday}</td>
+              <td><Pill tone={statusTone(entry.status)}>{entry.status}</Pill></td>
+              <td>{detail.first || '-'}</td>
+              <td>{detail.last || '-'}</td>
+              <td>{detail.trips || '-'}</td>
+              {!isStudent && <td>{detail.students || '-'}</td>}
+            </tr>;
+          })}</tbody>
+        </table>
+        {state.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading times...</div>}
+      </div>
+
+      <div className="modal-actions">
+        <button type="button" className="filter-btn" onClick={onClose}>Close</button>
+      </div>
+    </div>
+  </div>;
+}
 
 function AttendancePage({ routes }) {
   const [mode, setMode] = useState('students');
@@ -1391,10 +1721,13 @@ function AttendancePage({ routes }) {
   const [query, setQuery] = useState('');
   const [report, setReport] = useState(null);
   const [state, setState] = useState({ loading: true, error: '' });
+  const [selected, setSelected] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true, error: '' });
+    // The open row belongs to the report being replaced, so close it.
+    setSelected(null);
     const filters = mode === 'students'
       ? { month, ...(route !== 'all' ? { routeId: route } : {}) }
       : { month };
@@ -1421,20 +1754,42 @@ function AttendancePage({ routes }) {
   const fullAttendance = operatingDays ? rows.filter(row => row.presentDays === operatingDays).length : 0;
   const neverPresent = rows.filter(row => !row.presentDays).length;
 
-  const exportCsv = () => {
+  // One column per operating day (P present / A absent / H on hold) followed by
+  // the totals, so a single sheet serves as both the register and the summary.
+  const buildSheet = () => {
+    const dates = report?.dates || [];
     if (mode === 'students') {
-      downloadCsv(
-        `student-attendance-${month}.csv`,
-        ['Reg no', 'Student', 'Class', 'Branch', 'Route', 'Present days', 'Absent days', 'Operating days', 'Attendance %', 'Pickups', 'Drops', 'On hold'],
-        rows.map(row => [row.regNo, row.student, row.class, row.branch, row.route, row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.pickups, row.drops, row.onHold ? 'Yes' : 'No'])
-      );
-      return;
+      return {
+        name: `student-attendance-${month}`,
+        headers: ['Reg no', 'Student', 'Class', 'Branch', 'Route', ...dates, 'Present days', 'Absent days', 'Operating days', 'Attendance %', 'Pickups', 'Drops', 'On hold'],
+        rows: rows.map(row => {
+          const present = new Set(row.dates || []);
+          const marks = dates.map(date => statusMark(present.has(date) ? 'Present' : row.onHold ? 'On hold' : 'Absent'));
+          return [row.regNo, row.student, row.class, row.branch, row.route, ...marks,
+            row.presentDays, row.onHold ? 0 : row.absentDays, operatingDays, row.attendancePct, row.pickups, row.drops, row.onHold ? 'Yes' : 'No'];
+        })
+      };
     }
-    downloadCsv(
-      `driver-attendance-${month}.csv`,
-      ['Driver', 'Phone', 'Vehicle', 'Status', 'Days active', 'Days absent', 'Operating days', 'Attendance %', 'Trips logged', 'Students handled'],
-      rows.map(row => [row.driver, row.phone, row.vehicle, row.status, row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.trips, row.studentsHandled])
-    );
+    return {
+      name: `driver-attendance-${month}`,
+      headers: ['Driver', 'Phone', 'Vehicle', 'Status', ...dates, 'Days active', 'Days absent', 'Operating days', 'Attendance %', 'Trips logged', 'Students handled'],
+      rows: rows.map(row => {
+        const present = new Set(row.dates || []);
+        const marks = dates.map(date => statusMark(present.has(date) ? 'Present' : 'Absent'));
+        return [row.driver, row.phone, row.vehicle, row.status, ...marks,
+          row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.trips, row.studentsHandled];
+      })
+    };
+  };
+
+  const exportCsv = () => {
+    const sheet = buildSheet();
+    downloadCsv(`${sheet.name}.csv`, sheet.headers, sheet.rows);
+  };
+
+  const exportExcel = () => {
+    const sheet = buildSheet();
+    downloadXlsx(`${sheet.name}.xlsx`, monthLabel(month), sheet.headers, sheet.rows);
   };
 
   return <section className="attendance-screen">
@@ -1449,12 +1804,13 @@ function AttendancePage({ routes }) {
       <div className="panel-head">
         <div>
           <h2>{mode === 'students' ? 'Student' : 'Driver'} monthly attendance</h2>
-          <p>Built from pickup and drop logs — a day counts as present when transport was logged that day</p>
+          <p>Built from pickup and drop logs — a day counts as present when transport was logged that day. Click a row for the day-by-day breakdown.</p>
         </div>
         <div className="panel-actions">
           <button type="button" className={`filter-btn ${mode === 'students' ? 'active' : ''}`} onClick={() => setMode('students')}><Icon name="student" size={15}/>Students</button>
           <button type="button" className={`filter-btn ${mode === 'drivers' ? 'active' : ''}`} onClick={() => setMode('drivers')}><Icon name="users" size={15}/>Drivers</button>
           <button type="button" className="filter-btn" onClick={exportCsv} disabled={!rows.length}><Icon name="upload" size={15}/>Export CSV</button>
+          <button type="button" className="filter-btn" onClick={exportExcel} disabled={!rows.length}><Icon name="upload" size={15}/>Export Excel</button>
         </div>
       </div>
 
@@ -1485,7 +1841,7 @@ function AttendancePage({ routes }) {
             : <tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Days active</th><th>Days absent</th><th>Attendance</th><th>Trips</th><th>Students</th><th>Last seen</th></tr>}
           </thead>
           <tbody>{mode === 'students'
-            ? rows.map(row => <tr key={row.studentId}>
+            ? rows.map(row => <tr key={row.studentId} className="clickable-row" onClick={() => setSelected(row)} title={`Day-by-day attendance for ${row.student}`}>
                 <td>{dash(row.regNo)}</td>
                 <td><strong>{row.student}</strong>{row.onHold ? <> <Pill tone="amber">On hold</Pill></> : null}</td>
                 <td>{dash(row.class)}</td>
@@ -1497,7 +1853,7 @@ function AttendancePage({ routes }) {
                 <td>{row.drops}</td>
                 <td>{row.lastSeen ? formatHistoryDate(row.lastSeen) : '-'}</td>
               </tr>)
-            : rows.map(row => <tr key={row.driverId}>
+            : rows.map(row => <tr key={row.driverId} className="clickable-row" onClick={() => setSelected(row)} title={`Day-by-day attendance for ${row.driver}`}>
                 <td><strong>{row.driver}</strong></td>
                 <td>{dash(row.phone)}</td>
                 <td>{dash(row.vehicle)}</td>
@@ -1514,6 +1870,14 @@ function AttendancePage({ routes }) {
         {!state.loading && !state.error && operatingDays > 0 && !rows.length && <div className="empty small-empty">No one matches this filter.</div>}
       </div>
     </div>
+
+    {selected && <AttendanceDetailModal
+      mode={mode}
+      row={selected}
+      month={report?.month || month}
+      operatingDates={report?.dates || []}
+      onClose={() => setSelected(null)}
+    />}
   </section>;
 }
 
@@ -2171,7 +2535,7 @@ export default function AdminApp() {
   const handleAddStudent = async record => {
     const created = await api.createStudent(record);
     if (record.route && record.route !== 'Not assigned') {
-      await api.assignStudent({ studentId: created.studentId, routeId: record.route });
+      await api.assignStudent({ studentId: created.studentId, routeId: record.route, slabId: slabIdFrom(record.slab) });
     }
     await refreshCoreData();
   };
@@ -2182,8 +2546,10 @@ export default function AdminApp() {
       if (row.route) {
         await api.unassignStudentByStudentId(updated.studentId);
       }
-    } else if (record.route !== row.route) {
-      await api.assignStudent({ studentId: updated.studentId, routeId: record.route });
+    // Re-assign when the slab changes too, not only the route — moving a student
+    // between slabs on the same route is exactly how their fee gets corrected.
+    } else if (record.route !== row.route || slabIdFrom(record.slab) !== (row.slabId ?? undefined)) {
+      await api.assignStudent({ studentId: updated.studentId, routeId: record.route, slabId: slabIdFrom(record.slab) });
     }
     await refreshCoreData();
   };

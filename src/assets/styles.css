@@ -149,3 +149,39 @@ button:disabled .spinner{opacity:.85}
 .attendance-screen .report-filters{grid-template-columns:repeat(3,minmax(150px,1fr))}
 .attendance-screen .report-table table{min-width:960px}
 .attendance-screen .api-banner{margin:14px 18px 0}
+
+/* Route distance slabs */
+.slab-field{display:flex;flex-direction:column;gap:7px}
+.slab-field-label{font-size:12px;font-weight:700;color:#4b5667}
+.slab-editor{border:1px solid #e4e9ef;border-radius:9px;padding:12px;background:#fbfcfd}
+.slab-rows{display:flex;flex-direction:column;gap:7px;margin-bottom:11px}
+.slab-row{display:grid;grid-template-columns:1fr 1fr 1.3fr 38px;gap:8px;align-items:center}
+.slab-row input{height:38px;width:100%;border:1px solid #dfe4eb;border-radius:8px;background:#fff;color:#273244;outline:none;font-size:13px;padding:0 10px}
+.slab-head span{font-size:11px;font-weight:700;color:#6b7686}
+.slab-remove{width:34px;height:34px;color:#a3607a;border-color:#eddbe2}
+.slab-remove:hover{background:#fdf2f5}
+.slab-empty{margin:0 0 11px;font-size:12px;color:#7d8797}
+.slab-actions{display:flex;gap:8px;flex-wrap:wrap}
+.slab-cell{display:flex;flex-direction:column;gap:3px}
+.slab-cell span{display:flex;gap:6px;align-items:baseline;font-size:11px;color:#5c6879;white-space:nowrap}
+.slab-cell b{color:#8490a0;font-weight:600;min-width:62px}
+@media(max-width:700px){.slab-row{grid-template-columns:1fr 1fr 1.3fr 34px;gap:5px}}
+
+/* Attendance drill-down */
+.clickable-row{cursor:pointer}
+.clickable-row:hover{background:#f6faf8}
+.attendance-modal{width:min(820px,100%)}
+.attendance-modal .api-banner,.attendance-modal .form-error{margin:0 20px 14px}
+.attendance-modal-actions{display:flex;gap:8px;padding:16px 20px 14px}
+.day-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(46px,1fr));gap:6px;padding:0 20px 16px}
+.day-chip{border:1px solid var(--line);border-radius:8px;padding:7px 4px;text-align:center;background:#f7f9fb;color:#8b95a4}
+.day-chip strong{display:block;font-size:13px;color:#3a465a}
+.day-chip small{display:block;font-size:9px;margin-top:2px}
+.day-chip.green{background:#e4f7f0;border-color:#bfe8d8;color:#16815f}
+.day-chip.green strong{color:#116b4f}
+.day-chip.red{background:#fdeaea;border-color:#f3cccc;color:#c93f3f}
+.day-chip.red strong{color:#b23434}
+.day-chip.amber{background:#fff3d2;border-color:#f0dda6;color:#bd8200}
+.day-chip.amber strong{color:#9c6c00}
+.attendance-modal .history-body{max-height:44vh}
+.attendance-modal .history-table th{position:sticky;top:0;background:#fff;z-index:1}
