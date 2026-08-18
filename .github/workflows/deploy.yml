@@ -23,5 +23,9 @@ jobs:
             cd ~/campus_tracker/location_app
             git pull origin main
             cd ~/campus_tracker
-            docker compose up --build -d frontend
+            # --no-deps: the frontend service declares depends_on: backend, so
+            # without it compose rebuilds and recreates the backend container
+            # too. That collides with the backend repo's own deploy workflow and
+            # leaves an orphaned container holding the name.
+            docker compose up --build -d --no-deps frontend
             docker image prune -f
