@@ -150,6 +150,34 @@ button:disabled .spinner{opacity:.85}
 .attendance-screen .report-table table{min-width:960px}
 .attendance-screen .api-banner{margin:14px 18px 0}
 
+/* Table toolbar
+   Wraps at every width, not only under 800px. Pages with several actions used to
+   squeeze the title into a narrow column and push the primary button past the
+   panel edge, because the row could not break. */
+.table-toolbar{flex-wrap:wrap;gap:12px}
+.toolbar-title{flex:1 1 220px;min-width:190px}
+.toolbar-actions{flex:1 1 auto;flex-wrap:wrap;justify-content:flex-end;align-items:center}
+/* The primary action never shrinks or wraps its label — it is the one control
+   on the row that must stay readable. */
+.toolbar-actions .primary-btn{flex:none;white-space:nowrap}
+
+/* Fee sheet import */
+.import-body{padding:18px 20px}
+.import-drop{display:flex;flex-direction:column;align-items:center;gap:6px;padding:28px;border:1.5px dashed #cfd9e4;border-radius:10px;background:#fbfcfd;color:#6b7686;cursor:pointer;text-align:center}
+.import-drop:hover{border-color:var(--brand);background:#f6fbf8}
+.import-drop strong{font-size:14px;color:#2b3648}
+.import-drop small{font-size:11px;color:#8b95a4}
+.import-drop input{display:none}
+.import-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:4px}
+.import-summary div{border:1px solid #e4ebe8;background:#f8fbfa;border-radius:8px;padding:12px}
+.import-summary span{display:block;font-size:10px;color:#6f7b8d;margin-bottom:5px}
+.import-summary strong{font-size:18px;color:#172033}
+.import-rejects{margin-top:14px;border:1px solid #f0c977;background:#fff8e8;border-radius:9px;padding:12px 14px;color:#6d520d}
+.import-rejects strong{display:block;font-size:12px;margin-bottom:6px}
+.import-rejects ul{margin:0;padding-left:16px;font-size:12px;line-height:1.6}
+.import-note{margin:14px 0 0;font-size:12px;color:#7d8797}
+@media(max-width:700px){.import-summary{grid-template-columns:repeat(2,1fr)}}
+
 /* Route distance slabs */
 .slab-field{display:flex;flex-direction:column;gap:7px}
 .slab-field-label{font-size:12px;font-weight:700;color:#4b5667}

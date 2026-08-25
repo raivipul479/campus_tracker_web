@@ -1102,7 +1102,7 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
     {rowActionError && <div className="form-error table-error">{rowActionError}</div>}
     <div className="panel table-panel">
       <div className="table-toolbar">
-        <div><h2>{type}</h2><p>{subtitle}</p></div>
+        <div className="toolbar-title"><h2>{type}</h2><p>{subtitle}</p></div>
         <div className="toolbar-actions">
           <label className="table-search"><Icon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder={`Search ${type.toLowerCase()}...`}/>{loading && <span className="spinner spinner-sm table-search-spinner"/>}</label>
           {filterFields.map(field => <select key={field.name} className="filter-select" value={filters[field.name] || 'all'} onChange={event => setFilter(field.name, event.target.value)}>
@@ -1261,6 +1261,8 @@ const studentFields = [
   { name: 'class', label: 'Class', required: true, maxLength: 80 },
   { name: 'section', label: 'Section', placeholder: 'A', maxLength: 16 },
   { name: 'guardianName', label: "Father's / Mother's name", maxLength: 160 },
+  // The fee sheet's E-Mail Address. Siblings legitimately share one.
+  { name: 'email', label: 'E-mail address', type: 'email', maxLength: 190 },
   // No '' entry here — the select always renders its own "Select" placeholder
   // with an empty value, which doubles as the way to clear the branch.
   { name: 'branch', label: 'Branch', type: 'select', options: ['JPC', 'JPIC'], required: true },
@@ -1886,8 +1888,129 @@ const studentIdFromSelection = selection => {
   return match ? Number(match[1]) : null;
 };
 
-function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, onGenerateDues, onRemindAll }) {
+/**
+ * Loads the office's own fee summary sheet.
+ *
+ * The sheet is what the fee gateway produces, so it is read verbatim rather than
+ * asked to be reshaped: the header row is located by name, and every column is
+ * matched by its heading rather than its position, because the export the office
+ * downloads hides columns D, E and I-K and a positional read would silently
+ * shift every value after the first gap.
+ */
+function ImportFeeSheetModal({ onClose, onImported }) {
+  const [state, setState] = useState({ stage: 'pick', error: '', preview: null, result: null, fileName: '' });
+  const [busy, setBusy] = useState(false);
+
+  const readRows = async file => {
+    const workbook = await readWorkbook(await file.arrayBuffer());
+    const grid = workbook.rows;
+    const headerIndex = grid.findIndex(row => row.some(cell => String(cell).trim() === 'Student Name'));
+    if (headerIndex === -1) {
+      throw new Error('No "Student Name" column found — is this the fee summary sheet?');
+    }
+    const headers = grid[headerIndex].map(cell => String(cell).trim());
+    return grid.slice(headerIndex + 1)
+      .map(row => Object.fromEntries(headers.map((header, column) => [header, row[column] ?? '']).filter(([header]) => header)))
+      .filter(row => String(row['Student Name'] ?? '').trim());
+  };
+
+  const pick = async event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setState(current => ({ ...current, error: '', fileName: file.name }));
+    try {
+      const rows = await readRows(file);
+      if (!rows.length) throw new Error('That sheet has no student rows.');
+      // Dry run first: the admin sees what a sheet will do before it touches a
+      // single fee record.
+      const preview = await api.importFeeSheet(rows, { dryRun: true });
+      setState({ stage: 'preview', error: '', preview, result: null, fileName: file.name, rows });
+    } catch (error) {
+      setState(current => ({ ...current, error: error.message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const commit = async () => {
+    setBusy(true);
+    try {
+      const result = await api.importFeeSheet(state.rows, { dryRun: false });
+      setState(current => ({ ...current, stage: 'done', result, error: '' }));
+      await onImported();
+    } catch (error) {
+      setState(current => ({ ...current, error: error.message }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const summary = state.result || state.preview;
+
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="record-modal" onClick={event => event.stopPropagation()}>
+      <div className="modal-head">
+        <div>
+          <h2>Import fee sheet</h2>
+          <p>Raises the dues the sheet describes, then records the payments against them</p>
+        </div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
+      </div>
+
+      <div className="import-body">
+        {state.stage === 'pick' && <label className="import-drop">
+          <Icon name="upload" size={22}/>
+          <strong>Choose the fee summary sheet</strong>
+          <small>.xlsx or .csv, in the format the fee gateway exports</small>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={pick} disabled={busy}/>
+        </label>}
+
+        {busy && <div className="empty small-empty loading-inline"><span className="spinner"/>Reading {state.fileName}...</div>}
+
+        {summary && !busy && <div className="import-summary">
+          <div><span>Dues created</span><strong>{summary.duesCreated}</strong></div>
+          <div><span>Dues updated</span><strong>{summary.duesUpdated}</strong></div>
+          <div><span>Payments recorded</span><strong>{summary.paymentsRecorded}</strong></div>
+          <div><span>Already imported</span><strong>{summary.paymentsSkipped}</strong></div>
+        </div>}
+
+        {summary?.rejected?.length > 0 && <div className="import-rejects">
+          <strong>{summary.rejected.length} row(s) will be skipped</strong>
+          <ul>{summary.rejected.slice(0, 12).map(reject => <li key={reject.row}>
+            Row {reject.row} — {reject.student || '(no name)'}: {reject.reason}
+          </li>)}</ul>
+          {summary.rejected.length > 12 && <small>...and {summary.rejected.length - 12} more</small>}
+        </div>}
+
+        {state.stage === 'preview' && !busy && <p className="import-note">
+          Nothing has been written yet. Payments are matched on their Qfix reference, so re-importing the same sheet updates rather than double-pays.
+        </p>}
+
+        {state.stage === 'done' && <div className="form-success">Import complete.</div>}
+        {state.error && <div className="form-error">{state.error}</div>}
+      </div>
+
+      <div className="modal-actions">
+        <button type="button" className="filter-btn" onClick={onClose} disabled={busy}>{state.stage === 'done' ? 'Close' : 'Cancel'}</button>
+        {state.stage === 'preview' && <button type="button" className="primary-btn" onClick={commit} disabled={busy}>
+          <Icon name="check" size={16}/>Import {summary ? summary.duesCreated + summary.duesUpdated : 0} row(s)
+        </button>}
+      </div>
+    </div>
+  </div>;
+}
+
+function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, onGenerateDues, onRemindAll, onImported }) {
   const [showReport, setShowReport] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+
+  // Exported straight from the server so the column order and the derived Fee
+  // Head / Fees Category come from the one place that owns the sheet format.
+  const exportSheet = async () => {
+    const sheet = await api.getFeeSheet({});
+    await downloadXlsx(`fee-summary-${dateInputValue(new Date())}.xlsx`, 'Fee summary', sheet.columns, sheet.rows);
+  };
   const dues = monthlyDueRows(feeDues);
   const rows = [...dues, ...payments];
   const settledPayments = settledPaymentRows(payments);
@@ -1993,7 +2116,14 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, on
       studentId,
       dueId: due?.dueId || due?.id || null
     };
-  }} secondaryAction={{ label: 'Fee report', icon: 'file', onClick: () => setShowReport(true) }} extraActions={[{ label: 'Generate monthly dues', icon: 'money', onClick: onGenerateDues }, { label: 'Remind all pending', icon: 'bell', onClick: onRemindAll }]}>{dueSummary}</DataPage>;
+  }} secondaryAction={{ label: 'Fee report', icon: 'file', onClick: () => setShowReport(true) }} extraActions={[
+    { label: 'Generate dues', icon: 'money', onClick: onGenerateDues },
+    { label: 'Import sheet', icon: 'upload', onClick: () => setImportOpen(true) },
+    // One export, in the .xlsx the office actually works in. A second CSV button
+    // bought little and pushed the primary action off the toolbar.
+    { label: 'Export sheet', icon: 'file', onClick: exportSheet },
+    { label: 'Remind pending', icon: 'bell', onClick: onRemindAll }
+  ]}>{dueSummary}{importOpen && <ImportFeeSheetModal onClose={() => setImportOpen(false)} onImported={onImported}/>}</DataPage>;
 }
 
 function DocumentsPage({ docs, onAdd }) {
@@ -2619,7 +2749,7 @@ export default function AdminApp() {
   if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle} loading={tableLoading.vehicles}/>;
   if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver} loading={tableLoading.drivers}/>;
   if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} onImported={refreshCoreData} loading={tableLoading.students}/>;
-  if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }} onEdit={async record => {
+  if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onImported={refreshCoreData} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }} onEdit={async record => {
     // Only these four are correctable; the student and the due a receipt is
     // linked to are not, so a misassigned payment must be deleted and re-posted.
     await api.updatePayment(record.id, { amount: parseAmount(record.amount), status: record.status, method: record.method, date: record.date });

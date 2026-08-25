@@ -113,6 +113,12 @@ export const api = {
     method: 'PATCH',
     body: JSON.stringify({ discount, fine })
   }),
+  // The office's own fee summary sheet, read and written verbatim.
+  getFeeSheet: filters => request(`/fee-dues/sheet/export${queryString(filters)}`),
+  importFeeSheet: (rows, { dryRun = false } = {}) => request('/fee-dues/sheet/import', {
+    method: 'POST',
+    body: JSON.stringify({ rows, dryRun })
+  }),
   getFeeSummary: filters => request(`/fee-dues/summary${queryString(filters)}`),
   getFeeReport: filters => request(`/fee-dues/report${queryString(filters)}`),
   getStudentAttendance: filters => request(`/attendance/students${queryString(filters)}`),
