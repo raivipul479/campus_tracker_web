@@ -775,7 +775,8 @@ function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId }) {
       <Marker key={selectedPoint.id} position={[selectedPoint.latitude, selectedPoint.longitude]} icon={busMarkerIcon}>
         <Popup>
           <div className="map-popup">
-            <strong>{selectedPoint.vehicleNo}</strong>
+            <strong>{vehicleLabel(selectedPoint)}</strong>
+            {selectedPoint.vehicleCode && <span>{selectedPoint.vehicleNo}</span>}
             {selectedPoint.alias && <span>{selectedPoint.alias}</span>}
             <span>Speed: {selectedPoint.speed} km/h</span>
             <span>Ignition: {selectedPoint.ignition ? 'On' : 'Off'}</span>
@@ -845,7 +846,7 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
         const marker = new maps.Marker({
           map: mapInstanceRef.current,
           position: center,
-          title: selectedPoint.vehicleNo,
+          title: vehicleLabel(selectedPoint),
           icon: googleBusIcon(maps, selectedPoint.ignition)
         });
 
@@ -855,7 +856,7 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
           const container = document.createElement('div');
           container.className = 'map-popup';
           const title = document.createElement('strong');
-          title.textContent = selectedPoint.vehicleNo;
+          title.textContent = vehicleLabel(selectedPoint);
           const aliasEl = document.createElement('span');
           aliasEl.textContent = selectedPoint.alias || '-';
           const speedEl = document.createElement('span');
@@ -891,6 +892,11 @@ function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId }) {
   }
   return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId}/>;
 }
+
+// Buses are known by their fleet code (BUS-01), not the registration plate.
+// The plate is the fallback for a vehicle the GPS provider reports that we hold
+// no record of, where the code is all we would otherwise have to show.
+const vehicleLabel = point => point?.vehicleCode || point?.vehicleNo || '-';
 
 const timeAgo = date => {
   if (!date) return 'No timestamp';
@@ -2218,8 +2224,8 @@ function TrackingPage({ vehicles }) {
     <div className="panel tracking-list">
       <div className="panel-head"><div><h2>Active vehicles</h2><p>{liveVehicles.filter(v => v.status !== 'Offline').length} of {liveVehicles.length} online</p></div></div>
       <label className="table-search full"><Icon name="search" size={16}/><input placeholder="Search vehicle or driver..."/></label>
-      {selected && <div className="selected-gps-card"><strong>{selected.vehicleNo}</strong><span>{selected.route} - {selected.driver}</span><div><b>{selected.speed || 0} km/h</b><small>{timeAgo(selected.timestamp)}</small></div></div>}
-      <div className="tracking-list-scroll">{liveVehicles.map(v=><button key={v.id} onClick={()=>setSelectedId(v.id)} className={`tracking-vehicle ${selected?.id===v.id?'selected':''}`}><span className={`vehicle-tile ${v.tone}`}><Icon name="bus"/></span><div><strong>{v.vehicleNo} <Pill tone={v.tone}>{v.status}</Pill></strong><small>{v.driver} - {v.route}</small><span>{v.students} students <b>-</b> {v.speed?`${v.speed} km/h`:timeAgo(v.timestamp)}</span></div><Icon name="arrow" size={16}/></button>)}</div>
+      {selected && <div className="selected-gps-card"><strong>{vehicleLabel(selected)}</strong><span>{selected.vehicleCode ? `${selected.vehicleNo} - ` : ''}{selected.route} - {selected.driver}</span><div><b>{selected.speed || 0} km/h</b><small>{timeAgo(selected.timestamp)}</small></div></div>}
+      <div className="tracking-list-scroll">{liveVehicles.map(v=><button key={v.id} onClick={()=>setSelectedId(v.id)} className={`tracking-vehicle ${selected?.id===v.id?'selected':''}`}><span className={`vehicle-tile ${v.tone}`}><Icon name="bus"/></span><div><strong>{vehicleLabel(v)} <Pill tone={v.tone}>{v.status}</Pill></strong><small>{v.vehicleCode ? `${v.vehicleNo} - ` : ''}{v.driver} - {v.route}</small><span>{v.students} students <b>-</b> {v.speed?`${v.speed} km/h`:timeAgo(v.timestamp)}</span></div><Icon name="arrow" size={16}/></button>)}</div>
     </div>
   </section>;
 }

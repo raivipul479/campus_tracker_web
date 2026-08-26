@@ -190,5 +190,15 @@ export const api = {
   // Proxied through our own backend: the provider sends no CORS headers, it
   // rate-limits to one call a minute, and its credential must not ship in the
   // browser bundle. The backend caches, so polling here is cheap.
-  getGpsVehicles: () => request('/gps/vehicles')
+  getGpsVehicles: async () => {
+    const payload = await request('/gps/vehicles');
+    return {
+      ...payload,
+      vehicles: (payload?.vehicles || []).map(vehicle => ({
+        ...vehicle,
+        // The API speaks ISO strings; the map and timeAgo() want Date objects.
+        timestamp: vehicle.reportedAt ? new Date(vehicle.reportedAt) : null
+      }))
+    };
+  }
 };
