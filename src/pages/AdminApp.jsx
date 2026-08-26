@@ -2133,33 +2133,38 @@ function DocumentsPage({ docs, onAdd }) {
 
 function TrackingPage({ vehicles }) {
   const [gpsPoints, setGpsPoints] = useState([]);
-  const [gpsStatus, setGpsStatus] = useState({ loading: api.hasGpsConfig, error: '', local: !api.hasGpsConfig });
+  const [gpsStatus, setGpsStatus] = useState({ loading: true, error: '', local: false, ageMs: 0, stale: false });
   const [selectedId, setSelectedId] = useState('');
 
   useEffect(() => {
-    if (!api.hasGpsConfig) {
-      setGpsPoints([]);
-      setGpsStatus({ loading: false, error: '', local: true });
-      return;
-    }
-
     let active = true;
     const loadGps = async () => {
       try {
-        const rows = await api.getGpsVehicles();
+        const payload = await api.getGpsVehicles();
         if (!active) return;
+        const rows = payload?.vehicles || [];
         setGpsPoints(rows);
         setSelectedId(current => current || rows[0]?.id || '');
-        setGpsStatus({ loading: false, error: '', local: false });
+        setGpsStatus({
+          loading: false,
+          error: '',
+          local: false,
+          ageMs: payload?.ageMs || 0,
+          stale: Boolean(payload?.stale)
+        });
       } catch (error) {
         if (!active) return;
+        // Say so rather than quietly drawing demo positions: a map of invented
+        // buses that looks real is worse than an empty one that admits it.
         setGpsPoints([]);
-        setGpsStatus({ loading: false, error: '', local: true });
+        setGpsStatus({ loading: false, error: error.message, local: true, ageMs: 0, stale: false });
       }
     };
 
     loadGps();
-    const timer = window.setInterval(loadGps, 10000);
+    // The backend caches for a minute (the provider's own rate limit), so
+    // polling faster than this only re-reads the same cached positions.
+    const timer = window.setInterval(loadGps, 30000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -2174,14 +2179,14 @@ function TrackingPage({ vehicles }) {
 
   const liveVehicles = gpsPoints.length
     ? gpsPoints.map(point => {
-        const matched = vehicles.find(vehicle => vehicle.id === point.vehicleNo || vehicle.plate === point.vehicleNo);
+        // The server matched the plate already; this only adds the student
+        // count, which it has no reason to carry.
+        const matched = vehicles.find(vehicle => vehicle.id === point.vehicleCode);
         return {
           ...point,
-          driver: matched?.driver || 'Unassigned',
-          route: matched?.route || point.alias || '-',
+          route: point.route || point.alias || '-',
           students: matched?.students || 0,
-          tone: point.ignition ? 'green' : 'gray',
-          status: point.ignition ? 'On route' : 'Stopped'
+          tone: point.ignition ? 'green' : 'gray'
         };
       })
     : demoVehiclePoints(vehicles).map(point => {

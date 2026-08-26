@@ -1,6 +1,4 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://campus-tracker-backend.onrender.com/api';
-const GPS_API_BASE_URL = import.meta.env.VITE_GPS_API_BASE_URL || '';
-const GPS_API_USERNAME = import.meta.env.VITE_GPS_API_USERNAME || '';
 const AUTH_TOKEN_KEY = 'campus_route_super_admin_token';
 const AUTH_ADMIN_KEY = 'campus_route_super_admin';
 
@@ -69,7 +67,6 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  hasGpsConfig: Boolean(GPS_API_BASE_URL && GPS_API_USERNAME),
   health: () => request('/health'),
   loginSuperAdmin: credentials => request('/auth/super-admin/login', {
     method: 'POST',
@@ -190,38 +187,8 @@ export const api = {
   getDriverAssignmentHistory: driverId => request(`/assignments/driver-history/${driverId}`),
   getVehicleAssignmentHistory: vehicleId => request(`/assignments/vehicle-history/${vehicleId}`),
   getStudentAssignmentHistory: studentId => request(`/assignments/student-history/${studentId}`),
-  getGpsVehicles: async () => {
-    if (!GPS_API_BASE_URL || !GPS_API_USERNAME) {
-      throw new Error('GPS API is not configured. Set VITE_GPS_API_BASE_URL and VITE_GPS_API_USERNAME.');
-    }
-
-    const response = await fetch(`${GPS_API_BASE_URL.replace(/\/$/, '')}/gps/public/api/v1/company`, {
-      headers: {
-        username: GPS_API_USERNAME
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`GPS API failed with status ${response.status}`);
-    }
-
-    const payload = await response.json();
-    if (payload?.code !== 0 || !Array.isArray(payload?.data)) {
-      throw new Error(payload?.status || 'GPS API returned an invalid response.');
-    }
-
-    return payload.data.map(item => ({
-      id: item.vehicleNo || item.alias || item.Imei,
-      vehicleNo: item.vehicleNo || 'Unknown vehicle',
-      alias: item.alias || '',
-      imei: item.Imei || item.imei || '',
-      latitude: Number(item.latitude),
-      longitude: Number(item.longitude),
-      speed: Number(item.speed || 0),
-      ignition: Boolean(item.ignition),
-      odometer: Number(item.totalGpsOdometer || 0),
-      gpsDuration: Number(item.totalGpsDuration || 0),
-      timestamp: item.timestamp ? new Date(Number(item.timestamp)) : null
-    })).filter(item => Number.isFinite(item.latitude) && Number.isFinite(item.longitude));
-  }
+  // Proxied through our own backend: the provider sends no CORS headers, it
+  // rate-limits to one call a minute, and its credential must not ship in the
+  // browser bundle. The backend caches, so polling here is cheap.
+  getGpsVehicles: () => request('/gps/vehicles')
 };
