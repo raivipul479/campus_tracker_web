@@ -187,9 +187,16 @@ export const api = {
   getDriverAssignmentHistory: driverId => request(`/assignments/driver-history/${driverId}`),
   getVehicleAssignmentHistory: vehicleId => request(`/assignments/vehicle-history/${vehicleId}`),
   getStudentAssignmentHistory: studentId => request(`/assignments/student-history/${studentId}`),
-  // Proxied through our own backend: the provider sends no CORS headers, it
-  // rate-limits to one call a minute, and its credential must not ship in the
-  // browser bundle. The backend caches, so polling here is cheap.
+  // Served from our own backend, which polls the provider on a fixed cadence and
+  // stores what it reports. The provider sends no CORS headers, rate-limits to
+  // one call a minute, and its credential must not ship in the browser bundle --
+  // so reads here are plain database queries and cost the provider nothing.
+  // One bus, by fleet code (BUS-01) or registration number, with or without
+  // the spaces the office may have typed.
+  getGpsVehicle: vehicle => request(`/gps/vehicles/${encodeURIComponent(vehicle)}`),
+  // Position history for replaying a route. `from`/`to` are ISO timestamps.
+  getGpsVehicleHistory: (vehicle, filters) =>
+    request(`/gps/vehicles/${encodeURIComponent(vehicle)}/history${queryString(filters)}`),
   getGpsVehicles: async () => {
     const payload = await request('/gps/vehicles');
     return {

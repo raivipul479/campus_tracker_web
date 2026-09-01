@@ -6,18 +6,20 @@ import { AdimoveLogo } from '../components/AdimoveLogo.jsx';
 // main.jsx). An app-store listing has to be able to reach this URL without
 // credentials, which is the main reason it exists.
 //
-// TODO before publishing: replace every [BRACKETED] placeholder below with the
-// school's real legal name, address and contact details, and have someone
-// qualified review the wording. The sections describe what this system
-// actually collects — they are not a substitute for legal advice.
+// The sections describe what this system actually collects. They are not a
+// substitute for legal advice — have someone qualified review the wording.
+//
+// A phone number and postal address strengthen the policy but are optional;
+// leave them empty and the contact card simply omits the line rather than
+// printing a placeholder.
 
-const LAST_UPDATED = '11 August 2026';
+const LAST_UPDATED = '30 August 2026';
 
 const CONTACT = {
-  organisation: '[SCHOOL LEGAL NAME]',
-  email: '[privacy@yourschool.example]',
-  phone: '[+91 XXXXXXXXXX]',
-  address: '[SCHOOL POSTAL ADDRESS]'
+  organisation: 'Adimove',
+  email: 'raivipul479@gmail.com',
+  phone: '',
+  address: ''
 };
 
 const PolicyIcon = ({ name, size = 18 }) => {
@@ -228,9 +230,9 @@ export default function PrivacyPolicy() {
                 <div>
                   <strong>{CONTACT.organisation}</strong>
                   <p>
-                    <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a><br/>
-                    {CONTACT.phone}<br/>
-                    {CONTACT.address}
+                    <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>
+                    {CONTACT.phone && <><br/>{CONTACT.phone}</>}
+                    {CONTACT.address && <><br/>{CONTACT.address}</>}
                   </p>
                 </div>
               </div>

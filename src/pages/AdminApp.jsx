@@ -73,6 +73,11 @@ const nav = [
   ['Students', 'student'], ['Fees & payments', 'money'], ['Attendance', 'check'], ['Documents', 'file'], ['Notifications', 'bell']
 ];
 
+// A bus reporting nothing for five minutes is parked, out of coverage, or the
+// provider is down. Worth saying out loud rather than showing a stale marker
+// as though it were live.
+const STALE_POSITION_MS = 5 * 60 * 1000;
+
 const SCHOOL_LOCATION = { lat: 26.9124, lng: 75.7873 };
 
 const demoVehiclePoints = vehicles => vehicles.map(vehicle => ({
@@ -2151,12 +2156,15 @@ function TrackingPage({ vehicles }) {
         const rows = payload?.vehicles || [];
         setGpsPoints(rows);
         setSelectedId(current => current || rows[0]?.id || '');
+        // The oldest reading across the fleet: one bus out of coverage is
+        // exactly what a static marker cannot tell you on its own.
+        const oldest = rows.reduce((max, row) => Math.max(max, row.ageMs || 0), 0);
         setGpsStatus({
           loading: false,
           error: '',
           local: false,
-          ageMs: payload?.ageMs || 0,
-          stale: Boolean(payload?.stale)
+          ageMs: oldest,
+          stale: oldest > STALE_POSITION_MS
         });
       } catch (error) {
         if (!active) return;
@@ -2214,7 +2222,7 @@ function TrackingPage({ vehicles }) {
       <div className="panel-head">
         <div>
           <h2>Live fleet map</h2>
-          <p><span className="live-dot"></span>{gpsStatus.local ? 'Database vehicle locations' : gpsStatus.loading ? 'Connecting to GPS API...' : 'Updating every 10 seconds'}</p>
+          <p><span className="live-dot"></span>{gpsStatus.local ? 'Database vehicle locations' : gpsStatus.loading ? 'Connecting to GPS API...' : gpsStatus.stale ? `Last position ${Math.round(gpsStatus.ageMs / 60000)} min old` : 'Live positions, refreshed every 30 seconds'}</p>
         </div>
         <div className="tracking-meta"><span>{gpsStatus.local ? 'DB fallback' : `${gpsPoints.length} live vehicles`}</span></div>
       </div>
