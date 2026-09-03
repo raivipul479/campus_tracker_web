@@ -1276,7 +1276,7 @@ const studentFields = [
   { name: 'email', label: 'E-mail address', type: 'email', maxLength: 190 },
   // No '' entry here — the select always renders its own "Select" placeholder
   // with an empty value, which doubles as the way to clear the branch.
-  { name: 'branch', label: 'Branch', type: 'select', options: ['JPC', 'JPIC'], required: true },
+  { name: 'branch', label: 'Branch', type: 'select', options: ['JPIS', 'JPS'], required: true },
   // On hold hides the student from the driver's roster and blocks pickup/drop
   // logging for them. Admin and parent views are unaffected.
   { name: 'onHold', label: 'On hold', type: 'select', options: ['No', 'Yes'], defaultValue: 'No' },
