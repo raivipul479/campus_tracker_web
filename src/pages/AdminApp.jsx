@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import '../assets/global.css';
@@ -762,7 +762,7 @@ function VehicleMapBounds({ points }) {
   return null;
 }
 
-function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId }) {
+function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail = [] }) {
   if (!points.length) {
     return <div className="google-map-fallback"><MiniMap vehicles={fallbackVehicles} expanded/><div className="map-warning"><Icon name="clock" size={17}/><span>Waiting for GPS vehicle data...</span></div></div>;
   }
@@ -776,7 +776,10 @@ function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId }) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      <VehicleMapBounds points={[selectedPoint]}/>
+      <VehicleMapBounds points={trail.length > 1 ? [...trail, selectedPoint] : [selectedPoint]}/>
+      {trail.length > 1 && <Polyline
+        positions={trail.map(point => [point.latitude, point.longitude])}
+        pathOptions={{ color: '#34b27b', weight: 4, opacity: 0.85 }}/>}
       <Marker key={selectedPoint.id} position={[selectedPoint.latitude, selectedPoint.longitude]} icon={busMarkerIcon}>
         <Popup>
           <div className="map-popup">
@@ -804,10 +807,11 @@ function googleBusIcon(maps, moving) {
   };
 }
 
-function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
+function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail = [] }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
+  const trailRef = useRef(null);
   const infoWindowRef = useRef(null);
   const [mapError, setMapError] = useState('');
   const mapPoints = useMemo(
@@ -848,6 +852,19 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
         markersRef.current.forEach(marker => marker.setMap(null));
         markersRef.current = [];
 
+        // Where this bus has been, drawn behind the live marker so the current
+        // position still reads as the current position.
+        if (trailRef.current) trailRef.current.setMap(null);
+        if (trail.length > 1) {
+          trailRef.current = new maps.Polyline({
+            map: mapInstanceRef.current,
+            path: trail.map(point => ({ lat: point.latitude, lng: point.longitude })),
+            strokeColor: '#34b27b',
+            strokeOpacity: 0.85,
+            strokeWeight: 4
+          });
+        }
+
         const marker = new maps.Marker({
           map: mapInstanceRef.current,
           position: center,
@@ -874,8 +891,17 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
         });
         markersRef.current.push(marker);
 
-        mapInstanceRef.current.setCenter(center);
-        mapInstanceRef.current.setZoom(15);
+        if (trail.length > 1) {
+          // Fit the route rather than centring on the bus, otherwise most of
+          // where it has been sits off-screen.
+          const bounds = new maps.LatLngBounds();
+          trail.forEach(point => bounds.extend({ lat: point.latitude, lng: point.longitude }));
+          bounds.extend(center);
+          mapInstanceRef.current.fitBounds(bounds, 48);
+        } else {
+          mapInstanceRef.current.setCenter(center);
+          mapInstanceRef.current.setZoom(15);
+        }
         setMapError('');
       })
       .catch(error => setMapError(error.message || 'Google Maps could not be loaded.'));
@@ -883,7 +909,7 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
     return () => {
       cancelled = true;
     };
-  }, [selectedPoint]);
+  }, [selectedPoint, trail]);
 
   return <div className="google-map-shell">
     {mapError && <div className="map-warning map-warning-top"><Icon name="alert" size={17}/><span>{mapError}</span></div>}
@@ -891,11 +917,11 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId }) {
   </div>;
 }
 
-function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId }) {
+function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId, trail }) {
   if (GOOGLE_MAPS_API_KEY) {
-    return <VehicleGoogleMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId}/>;
+    return <VehicleGoogleMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail}/>;
   }
-  return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId}/>;
+  return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail}/>;
 }
 
 // Buses are known by their fleet code (BUS-01), not the registration plate.
@@ -2142,7 +2168,123 @@ function DocumentsPage({ docs, onAdd }) {
   return <DataPage type="Document centre" data={docs} columns={columns} subtitle="No document records are stored until a database-backed document endpoint is added." action="Upload document" fields={documentFields} onAdd={onAdd}/>;
 }
 
+// Local datetime for <input type="datetime-local">, which has no timezone and
+// so must be given local wall-clock time rather than an ISO string.
+const localInputValue = date => {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+// Metres between two positions, for the distance covered over a route.
+const metresBetween = (a, b) => {
+  const R = 6371000;
+  const toRad = deg => (deg * Math.PI) / 180;
+  const dLat = toRad(b.latitude - a.latitude);
+  const dLng = toRad(b.longitude - a.longitude);
+  const lat1 = toRad(a.latitude);
+  const lat2 = toRad(b.latitude);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+function RouteHistoryPanel({ vehicles, initialVehicle }) {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const [vehicle, setVehicle] = useState(initialVehicle || vehicles[0]?.id || '');
+  const [from, setFrom] = useState(localInputValue(startOfToday));
+  const [to, setTo] = useState(localInputValue(now));
+  const [result, setResult] = useState(null);
+  const [state, setState] = useState({ loading: false, error: '' });
+
+  const load = async () => {
+    if (!vehicle) return;
+    setState({ loading: true, error: '' });
+    try {
+      // datetime-local gives local wall-clock; new Date() reads it as local and
+      // toISOString converts to UTC, which is what the API expects.
+      const data = await api.getGpsVehicleHistory(vehicle, {
+        from: from ? new Date(from).toISOString() : undefined,
+        to: to ? new Date(to).toISOString() : undefined,
+        limit: 2000
+      });
+      setResult(data);
+      setState({ loading: false, error: '' });
+    } catch (error) {
+      setResult(null);
+      setState({ loading: false, error: error.message });
+    }
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const positions = result?.positions || [];
+  const distanceKm = positions.reduce(
+    (total, point, index) => index ? total + metresBetween(positions[index - 1], point) : 0, 0
+  ) / 1000;
+  const moving = positions.filter(point => point.ignition).length;
+
+  return <div className="panel tracking-map">
+    <div className="panel-head">
+      <div>
+        <h2>Route history</h2>
+        <p>Where a bus went, drawn from its recorded positions</p>
+      </div>
+    </div>
+    <div className="report-filters history-filters">
+      <label><span>Vehicle</span>
+        <select value={vehicle} onChange={event => setVehicle(event.target.value)}>
+          {vehicles.map(item => <option key={item.id} value={item.id}>
+            {item.id}{item.plate ? ` — ${item.plate}` : ''}
+          </option>)}
+        </select>
+      </label>
+      <label><span>From</span><input type="datetime-local" value={from} onChange={event => setFrom(event.target.value)}/></label>
+      <label><span>To</span><input type="datetime-local" value={to} onChange={event => setTo(event.target.value)}/></label>
+      <label><span>&nbsp;</span>
+        <button type="button" className="primary-btn" onClick={load} disabled={state.loading || !vehicle}>
+          {state.loading ? <><span className="spinner"/>Loading</> : <><Icon name="search" size={15}/>Show route</>}
+        </button>
+      </label>
+    </div>
+
+    {state.error && <div className="gps-error"><Icon name="alert" size={17}/><span>{state.error}</span></div>}
+
+    {result && <div className="report-summary">
+      <div><span>Positions</span><strong>{positions.length}</strong></div>
+      <div><span>Distance</span><strong>{distanceKm.toFixed(1)} km</strong></div>
+      <div><span>With ignition on</span><strong>{moving}</strong></div>
+      <div><span>First / last</span><strong className="history-span">
+        {positions.length
+          ? `${formatHistoryDate(positions[0].reportedAt)} — ${formatHistoryDate(positions[positions.length - 1].reportedAt)}`
+          : '-'}
+      </strong></div>
+    </div>}
+
+    {!state.loading && (positions.length
+      ? <VehicleLiveMap
+          points={[positions[positions.length - 1]]}
+          fallbackVehicles={[]}
+          selectedVehicleId={positions[positions.length - 1].id}
+          trail={positions}/>
+      : <div className="google-map-fallback"><div className="map-warning">
+          <Icon name="clock" size={17}/><span>No positions recorded in this window.</span>
+        </div></div>)}
+  </div>;
+}
+
+// How far back the live map's trail reaches. Off means today's position only.
+const TRAIL_WINDOWS = [
+  { value: 0, label: 'No trail' },
+  { value: 1, label: 'Last 1 hour' },
+  { value: 6, label: 'Last 6 hours' },
+  { value: 24, label: 'Last 24 hours' }
+];
+
 function TrackingPage({ vehicles }) {
+  const [showHistory, setShowHistory] = useState(false);
+  const [trailHours, setTrailHours] = useState(6);
+  const [trail, setTrail] = useState([]);
   const [gpsPoints, setGpsPoints] = useState([]);
   const [gpsStatus, setGpsStatus] = useState({ loading: true, error: '', local: false, ageMs: 0, stale: false });
   const [selectedId, setSelectedId] = useState('');
@@ -2216,18 +2358,56 @@ function TrackingPage({ vehicles }) {
     });
 
   const selected = liveVehicles.find(vehicle => vehicle.id === selectedId) || liveVehicles[0];
+  const trailKey = selected?.vehicleCode || selected?.vehicleNo || '';
+
+  // The path this bus has taken, shown behind its current position.
+  useEffect(() => {
+    if (!trailKey || !trailHours) {
+      setTrail([]);
+      return;
+    }
+    let active = true;
+    api.getGpsVehicleHistory(trailKey, {
+      from: new Date(Date.now() - trailHours * 3600 * 1000).toISOString(),
+      limit: 1000
+    })
+      .then(data => { if (active) setTrail(data?.positions || []); })
+      // A missing trail must not break the live map: the bus position is the
+      // point of this screen, the trail is context.
+      .catch(() => { if (active) setTrail([]); });
+    return () => { active = false; };
+  }, [trailKey, trailHours, gpsPoints.length]);
+
+  if (showHistory) {
+    return <section className="fee-report-screen">
+      <button type="button" className="filter-btn report-back-btn" onClick={() => setShowHistory(false)}>
+        <Icon name="arrow" size={15}/>Back to live map
+      </button>
+      <RouteHistoryPanel vehicles={vehicles} initialVehicle={selected?.vehicleCode || selected?.id}/>
+    </section>;
+  }
 
   return <section className="tracking-page">
     <div className="panel tracking-map">
       <div className="panel-head">
         <div>
           <h2>Live fleet map</h2>
-          <p><span className="live-dot"></span>{gpsStatus.local ? 'Database vehicle locations' : gpsStatus.loading ? 'Connecting to GPS API...' : gpsStatus.stale ? `Last position ${Math.round(gpsStatus.ageMs / 60000)} min old` : 'Live positions, refreshed every 30 seconds'}</p>
+          <p><span className="live-dot"></span>{gpsStatus.local ? 'Database vehicle locations' : gpsStatus.loading ? 'Connecting to GPS API...' : gpsStatus.stale ? `Last position ${Math.round(gpsStatus.ageMs / 60000)} min old` : trail.length > 1 ? `Live position, with the last ${trailHours}h of travel` : 'Live positions, refreshed every 30 seconds'}</p>
         </div>
-        <div className="tracking-meta"><span>{gpsStatus.local ? 'DB fallback' : `${gpsPoints.length} live vehicles`}</span></div>
+        <div className="tracking-meta">
+          <span>{gpsStatus.local ? 'DB fallback' : `${gpsPoints.length} live vehicles`}</span>
+          <select className="trail-select" value={trailHours}
+            onChange={event => setTrailHours(Number(event.target.value))}
+            title="Show where this bus has been">
+            {TRAIL_WINDOWS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <button type="button" className="filter-btn" onClick={() => setShowHistory(true)}>
+            <Icon name="clock" size={15}/>Route history
+          </button>
+        </div>
       </div>
       {gpsStatus.error && <div className="gps-error"><Icon name="alert" size={17}/><span>{gpsStatus.error}</span></div>}
-      <VehicleLiveMap points={gpsPoints} fallbackVehicles={vehicles} selectedVehicleId={selected?.id || selected?.vehicleNo}/>
+      <VehicleLiveMap points={gpsPoints} fallbackVehicles={vehicles} selectedVehicleId={selected?.id || selected?.vehicleNo} trail={trail}/>
     </div>
     <div className="panel tracking-list">
       <div className="panel-head"><div><h2>Active vehicles</h2><p>{liveVehicles.filter(v => v.status !== 'Offline').length} of {liveVehicles.length} online</p></div></div>
