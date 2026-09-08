@@ -1333,15 +1333,6 @@ const paymentFields = [
   { name: 'method', label: 'Method', type: 'select', options: ['UPI', 'Card', 'Cash', 'Bank transfer', '-'], required: true },
   { name: 'status', label: 'Status', type: 'select', options: ['Paid', 'Collected', 'Pending', 'Overdue'], required: true }
 ];
-const documentFields = [
-  { name: 'owner', label: 'Owner', required: true, minLength: 2, maxLength: 160 },
-  { name: 'kind', label: 'Owner type', type: 'select', options: ['Driver', 'Vehicle', 'Student'], required: true },
-  { name: 'type', label: 'Document type', required: true, minLength: 2, maxLength: 80 },
-  { name: 'number', label: 'Document number', required: true, minLength: 2, maxLength: 64 },
-  { name: 'expiry', label: 'Expiry date', type: 'date', required: true },
-  { name: 'status', label: 'Status', type: 'select', options: ['Verified', 'Expiring', 'Pending'], required: true }
-];
-
 function VehiclesPage({ vehicles, routes, filters, onFiltersChange, onAdd, onEdit, loading }) {
   const vehicleRows = vehicles.map(vehicle => ({ ...vehicle, compliance: complianceStatusForVehicle(vehicle) }));
   const columns = [{key:'id',label:'Vehicle',render:r=><div className="vehicle-cell"><span className={`vehicle-tile ${r.tone}`}><Icon name="bus"/></span><div><strong>{r.id}</strong><small>{r.plate}</small></div></div>},{key:'vehicleType',label:'Type',render:r=>dash(r.vehicleType)},{key:'driver',label:'Driver'},{key:'students',label:'Students'},{key:'seatingCapacity',label:'Seating capacity',render:r=>dash(r.seatingCapacity)},{key:'speed',label:'Current speed',render:r=>r.speed?`${r.speed} km/h`:'—'},statusCell('status'),{key:'compliance',label:'Compliance',render:r=><Pill tone={complianceTone(r.compliance)}>{r.compliance}</Pill>}];
@@ -2163,9 +2154,207 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, on
   ]}>{dueSummary}{importOpen && <ImportFeeSheetModal onClose={() => setImportOpen(false)} onImported={onImported}/>}</DataPage>;
 }
 
-function DocumentsPage({ docs, onAdd }) {
-  const columns = [{key:'owner',label:'Owner',render:r=><div><strong>{r.owner}</strong><small className="block-small">{r.kind}</small></div>},{key:'type',label:'Document type'},{key:'number',label:'Document number'},{key:'expiry',label:'Expiry date'},statusCell('status')];
-  return <DataPage type="Document centre" data={docs} columns={columns} subtitle="No document records are stored until a database-backed document endpoint is added." action="Upload document" fields={documentFields} onAdd={onAdd}/>;
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const ACCEPTED_DOCUMENTS = '.pdf,.jpg,.jpeg,.png';
+
+const formatBytes = bytes => {
+  if (!bytes) return '-';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+// Which list the owner picker draws from, and how each entry is labelled.
+const OWNER_SOURCES = {
+  Driver: { label: 'Driver', idOf: item => item.driverId || item.id, nameOf: item => item.name },
+  Vehicle: { label: 'Vehicle', idOf: item => item.vehicleId, nameOf: item => `${item.id}${item.plate ? ` — ${item.plate}` : ''}` },
+  Student: { label: 'Student', idOf: item => item.studentId || item.id, nameOf: item => `${item.name}${item.regNo ? ` — ${item.regNo}` : ''}` }
+};
+
+function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded }) {
+  const [values, setValues] = useState({
+    ownerType: 'Driver', ownerId: '', docType: '', docNumber: '', expiryDate: '', status: 'Pending', notes: ''
+  });
+  const [file, setFile] = useState(null);
+  const [state, setState] = useState({ busy: false, error: '' });
+
+  const owners = values.ownerType === 'Driver' ? drivers
+    : values.ownerType === 'Vehicle' ? vehicles : students;
+  const source = OWNER_SOURCES[values.ownerType];
+
+  const set = (name, value) => setValues(current => ({ ...current, [name]: value }));
+
+  const pickFile = event => {
+    const chosen = event.target.files?.[0];
+    if (!chosen) return setFile(null);
+    // Checked here for a quick answer; the server checks the contents too,
+    // since anything from the browser can be forged.
+    if (chosen.size > MAX_DOCUMENT_BYTES) {
+      setState({ busy: false, error: `That file is ${formatBytes(chosen.size)}. The limit is 10 MB.` });
+      setFile(null);
+      return;
+    }
+    setState({ busy: false, error: '' });
+    setFile(chosen);
+  };
+
+  const submit = async event => {
+    event.preventDefault();
+    if (!file) return setState({ busy: false, error: 'Choose a file to upload.' });
+    if (!values.ownerId) return setState({ busy: false, error: `Choose a ${source.label.toLowerCase()}.` });
+    setState({ busy: true, error: '' });
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      Object.entries(values).forEach(([key, value]) => { if (value) form.append(key, value); });
+      await api.uploadDocument(form);
+      await onUploaded();
+      onClose();
+    } catch (error) {
+      setState({ busy: false, error: error.message });
+    }
+  };
+
+  return <div className="modal-backdrop" onClick={onClose}>
+    <form className="record-modal" onClick={event => event.stopPropagation()} onSubmit={submit}>
+      <div className="modal-head">
+        <div><h2>Upload document</h2><p>PDF, JPEG or PNG, up to 10 MB</p></div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close"/></button>
+      </div>
+
+      {state.error && <div className="form-error">{state.error}</div>}
+
+      <div className="form-grid">
+        <label><span>Owner type *</span>
+          <select value={values.ownerType} onChange={event => { set('ownerType', event.target.value); set('ownerId', ''); }}>
+            {Object.keys(OWNER_SOURCES).map(key => <option key={key} value={key}>{key}</option>)}
+          </select>
+        </label>
+        <label><span>{source.label} *</span>
+          <select value={values.ownerId} onChange={event => set('ownerId', event.target.value)}>
+            <option value="">Select</option>
+            {owners.map(item => {
+              const id = source.idOf(item);
+              return <option key={id} value={id}>{source.nameOf(item)}</option>;
+            })}
+          </select>
+        </label>
+        <label><span>Document type *</span>
+          <input value={values.docType} onChange={event => set('docType', event.target.value)}
+            placeholder="Driving licence, Insurance, RC..." maxLength={80} required/>
+        </label>
+        <label><span>Document number *</span>
+          <input value={values.docNumber} onChange={event => set('docNumber', event.target.value)} maxLength={64} required/>
+        </label>
+        <label><span>Expiry date</span>
+          <input type="date" value={values.expiryDate} onChange={event => set('expiryDate', event.target.value)}/>
+        </label>
+        <label><span>Status *</span>
+          <select value={values.status} onChange={event => set('status', event.target.value)}>
+            {['Pending', 'Verified', 'Expiring', 'Expired'].map(item => <option key={item} value={item}>{item}</option>)}
+          </select>
+        </label>
+        <label className="full"><span>File *</span>
+          <input type="file" accept={ACCEPTED_DOCUMENTS} onChange={pickFile} disabled={state.busy}/>
+          {file && <small className="block-small">{file.name} — {formatBytes(file.size)}</small>}
+        </label>
+        <label className="full"><span>Notes</span>
+          <textarea value={values.notes} onChange={event => set('notes', event.target.value)} maxLength={255}/>
+        </label>
+      </div>
+
+      <div className="modal-actions">
+        <button type="button" className="filter-btn" onClick={onClose} disabled={state.busy}>Cancel</button>
+        <button type="submit" className="primary-btn" disabled={state.busy}>
+          {state.busy ? <><span className="spinner"/>Uploading</> : <><Icon name="upload" size={15}/>Upload</>}
+        </button>
+      </div>
+    </form>
+  </div>;
+}
+
+function DocumentsPage({ drivers, vehicles, students }) {
+  const [docs, setDocs] = useState([]);
+  const [state, setState] = useState({ loading: true, error: '' });
+  const [uploading, setUploading] = useState(false);
+  const [query, setQuery] = useState('');
+
+  const load = async () => {
+    setState({ loading: true, error: '' });
+    try {
+      setDocs(await api.getDocuments({}));
+      setState({ loading: false, error: '' });
+    } catch (error) {
+      setDocs([]);
+      setState({ loading: false, error: error.message });
+    }
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const remove = async doc => {
+    if (!window.confirm(`Delete "${doc.fileName}"? The file is removed from the server as well.`)) return;
+    try {
+      await api.deleteDocument(doc.id);
+      await load();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  };
+
+  const rows = docs.filter(doc => {
+    const text = query.trim().toLowerCase();
+    if (!text) return true;
+    return [doc.owner, doc.type, doc.number, doc.fileName].some(v => String(v || '').toLowerCase().includes(text));
+  });
+
+  return <section className="data-page">
+    <div className="panel table-panel">
+      <div className="table-toolbar">
+        <div><h2>Document centre</h2><p>{docs.length} document{docs.length === 1 ? '' : 's'} stored on the server</p></div>
+        <div className="toolbar-actions">
+          <label className="table-search"><Icon name="search" size={16}/>
+            <input placeholder="Search documents..." value={query} onChange={event => setQuery(event.target.value)}/>
+          </label>
+          <button className="primary-btn" onClick={() => setUploading(true)}>
+            <Icon name="plus" size={15}/>Upload document
+          </button>
+        </div>
+      </div>
+
+      {state.error && <div className="api-banner table-error"><Icon name="alert" size={17}/><span>{state.error}</span></div>}
+
+      <div className="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Owner</th><th>Document type</th><th>Number</th><th>Expiry</th>
+            <th>Status</th><th>File</th><th>Uploaded</th><th></th>
+          </tr></thead>
+          <tbody>{rows.map(doc => <tr key={doc.id}>
+            <td><div><strong>{doc.owner}</strong><small className="block-small">{doc.kind}</small></div></td>
+            <td>{doc.type}</td>
+            <td>{doc.number}</td>
+            <td>{doc.expiry || '-'}</td>
+            <td><Pill>{doc.status}</Pill></td>
+            <td><div><span>{doc.fileName}</span><small className="block-small">{formatBytes(doc.sizeBytes)}</small></div></td>
+            <td>{formatHistoryDate(doc.createdAt)}</td>
+            <td><div className="row-actions">
+              <button className="text-action" onClick={() => api.downloadDocument(doc.id, doc.fileName).catch(error => window.alert(error.message))}>Download</button>
+              <button className="text-action danger" onClick={() => remove(doc)}>Delete</button>
+            </div></td>
+          </tr>)}</tbody>
+        </table>
+        {state.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading documents...</div>}
+        {!state.loading && !rows.length && <div className="empty small-empty">
+          {docs.length ? 'No documents match this search.' : 'No documents uploaded yet.'}
+        </div>}
+      </div>
+    </div>
+
+    {uploading && <UploadDocumentModal
+      drivers={drivers} vehicles={vehicles} students={students}
+      onClose={() => setUploading(false)} onUploaded={load}/>}
+  </section>;
 }
 
 // Local datetime for <input type="datetime-local">, which has no timezone and
@@ -2718,7 +2907,6 @@ export default function AdminApp() {
   const [studentFilters, setStudentFilters] = useState({});
   const [payments, setPayments] = useState([]);
   const [feeDues, setFeeDues] = useState([]);
-  const [docs, setDocs] = useState([]);
   const [apiStatus, setApiStatus] = useState({ loading: Boolean(session?.token), error: '' });
   const [tableLoading, setTableLoading] = useState({});
   const setResourceLoading = (key, value) => setTableLoading(current => ({ ...current, [key]: value }));
@@ -2955,7 +3143,7 @@ export default function AdminApp() {
     await refreshCoreData();
   }} onDelete={async record => { await api.deletePayment(record.id); await refreshCoreData(); }}/>;
   if(active==='Attendance') content=<AttendancePage routes={routes}/>;
-  if(active==='Documents') content=<DocumentsPage docs={docs} onAdd={() => { throw new Error('Document storage endpoint is not configured.'); }}/>;
+  if(active==='Documents') content=<DocumentsPage drivers={drivers} vehicles={vehicles} students={students}/>;
   if(active==='Notifications') content=<NotificationsPage students={students} feeDues={feeDues} onRemindStudent={async ({ studentId }) => api.sendFeeReminder({ studentId })} onRemindAll={async () => api.sendFeeReminder({ all: true })}/>;
   if(active==='Settings') content=<SettingsPage/>;
   content = <>{apiStatus.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{apiStatus.error}</span></div>}{apiStatus.loading && <div className="api-banner muted"><span className="spinner"/><span>Connecting to backend...</span></div>}{content}</>;

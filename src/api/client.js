@@ -66,6 +66,59 @@ async function request(path, options = {}) {
   return response.json();
 }
 
+// Multipart upload. Deliberately does not go through request(): that sets
+// Content-Type: application/json, and a FormData body needs the browser to set
+// it so the multipart boundary is included.
+async function upload(path, formData) {
+  const session = getStoredSession();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}) },
+    body: formData
+  });
+  if (!response.ok) {
+    let message = `Upload failed with status ${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload?.error?.message || message;
+    } catch {
+      // Non-JSON error body: keep the status message.
+    }
+    if (response.status === 401 && session?.token) {
+      clearStoredSession();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+// Documents are behind auth, so they cannot be fetched with a plain <a href>.
+// Pulled as a blob with the bearer token, then handed to the browser.
+async function download(path, fallbackName) {
+  const session = getStoredSession();
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}) }
+  });
+  if (!response.ok) {
+    let message = `Download failed with status ${response.status}`;
+    try {
+      const payload = await response.json();
+      message = payload?.error?.message || message;
+    } catch {
+      // Keep the status message.
+    }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fallbackName || 'document';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   health: () => request('/health'),
   loginSuperAdmin: credentials => request('/auth/super-admin/login', {
@@ -197,6 +250,10 @@ export const api = {
   // Position history for replaying a route. `from`/`to` are ISO timestamps.
   getGpsVehicleHistory: (vehicle, filters) =>
     request(`/gps/vehicles/${encodeURIComponent(vehicle)}/history${queryString(filters)}`),
+  getDocuments: filters => request(`/documents${queryString(filters)}`),
+  uploadDocument: formData => upload('/documents', formData),
+  downloadDocument: (id, fileName) => download(`/documents/${id}/file`, fileName),
+  deleteDocument: id => request(`/documents/${id}`, { method: 'DELETE' }),
   getGpsVehicles: async () => {
     const payload = await request('/gps/vehicles');
     return {
