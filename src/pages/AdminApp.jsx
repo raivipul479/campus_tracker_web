@@ -1004,6 +1004,80 @@ function AttentionPanel({ vehicles, students, feeDues, setActive }) {
   </div>;
 }
 
+// How the server describes a document's expiry, and how it should read.
+const EXPIRY_TONE = { expired: 'red', expiring: 'amber', ok: 'green', none: '' };
+
+const expiryLabel = doc => {
+  if (doc.expiryState === 'expired') {
+    const days = Math.abs(doc.daysLeft);
+    return `Expired ${days} day${days === 1 ? '' : 's'} ago`;
+  }
+  if (doc.expiryState === 'expiring') {
+    return doc.daysLeft === 0 ? 'Expires today' : `${doc.daysLeft} day${doc.daysLeft === 1 ? '' : 's'} left`;
+  }
+  if (doc.expiryState === 'ok') return `${doc.daysLeft} days left`;
+  return 'No expiry';
+};
+
+/**
+ * Documents past their expiry date or close to it.
+ *
+ * Shown on the dashboard and above the document table, because a lapsed
+ * licence or insurance certificate is the kind of thing nobody goes looking
+ * for until it is a problem.
+ */
+function ExpiringDocuments({ onOpenDocuments, limit }) {
+  const [data, setData] = useState(null);
+  const [state, setState] = useState({ loading: true, error: '' });
+
+  useEffect(() => {
+    let active = true;
+    api.getExpiringDocuments(30)
+      .then(result => { if (active) { setData(result); setState({ loading: false, error: '' }); } })
+      .catch(error => { if (active) { setData(null); setState({ loading: false, error: error.message }); } });
+    return () => { active = false; };
+  }, []);
+
+  if (state.loading) return null;
+  // A failure here must not crowd the page: this is a warning panel, not the
+  // reason anyone opened the dashboard.
+  if (state.error || !data) return null;
+  if (!data.documents.length) return null;
+
+  const shown = limit ? data.documents.slice(0, limit) : data.documents;
+
+  return <div className="panel expiry-panel">
+    <div className="panel-head">
+      <div>
+        <h2>Documents needing attention</h2>
+        <p>
+          {data.expired > 0 && <><strong>{data.expired} expired</strong>{data.expiring > 0 ? ' · ' : ''}</>}
+          {data.expiring > 0 && <>{data.expiring} expiring within {data.withinDays} days</>}
+        </p>
+      </div>
+      {onOpenDocuments && <button className="text-btn" onClick={onOpenDocuments}>
+        View all <Icon name="arrow" size={15}/>
+      </button>}
+    </div>
+    <div className="expiry-list">
+      {shown.map(doc => <div className="expiry-row" key={doc.id}>
+        <span className={`stat-icon ${EXPIRY_TONE[doc.expiryState]}`}><Icon name="file" size={17}/></span>
+        <div>
+          <strong>{doc.type}</strong>
+          <small>{doc.owner} — {doc.kind}</small>
+        </div>
+        <div className="expiry-when">
+          <Pill tone={EXPIRY_TONE[doc.expiryState]}>{expiryLabel(doc)}</Pill>
+          <small>{doc.expiry}</small>
+        </div>
+      </div>)}
+    </div>
+    {limit && data.documents.length > limit && <button className="panel-footer" onClick={onOpenDocuments}>
+      {data.documents.length - limit} more <Icon name="arrow" size={15}/>
+    </button>}
+  </div>;
+}
+
 function Overview({ setActive, vehicles, students, payments, feeDues }) {
   const activeVehicles = vehicles.filter(vehicle => vehicle.status !== 'Offline').length;
   const collected = payments.filter(payment => ['Paid', 'Collected'].includes(payment.status)).reduce((sum, payment) => sum + parseAmount(payment.amount), 0);
@@ -1015,6 +1089,8 @@ function Overview({ setActive, vehicles, students, payments, feeDues }) {
       <StatCard label="Fees collected" value={formatCurrency(collected)} change="DB" detail="payments" icon="money" tone="green"/>
       <StatCard label="Pending dues" value={formatCurrency(pendingDue)} change="DB" detail="route fees" icon="clock" tone="red"/>
     </section>
+    <ExpiringDocuments onOpenDocuments={() => setActive('Documents')} limit={5}/>
+
     <section className="dashboard-grid">
       <div className="panel fleet-panel"><div className="panel-head"><div><h2>Bus status</h2><p>Loaded from backend</p></div></div><div className="fleet-list">{vehicles.map(v => <div className="fleet-row" key={v.id}><span className={`vehicle-tile ${v.tone || vehicleToneForStatus(v.status)}`}><Icon name="bus"/></span><div><strong>{v.id}</strong><small>{v.driver || 'Unassigned driver'}</small></div><div className="fleet-route"><span>{v.route || 'No route'}</span><small>{v.students || 0} students</small></div><Pill tone={v.tone || vehicleToneForStatus(v.status)}>{v.status}</Pill><b>{v.speed ? `${v.speed} km/h` : '-'}</b></div>)}</div>{!vehicles.length && <div className="empty small-empty">No buses found in database.</div>}<button className="panel-footer" onClick={() => setActive('Vehicles')}>View all buses <Icon name="arrow" size={15}/></button></div>
       <AttentionPanel vehicles={vehicles} students={students} feeDues={feeDues} setActive={setActive}/>
@@ -2325,7 +2401,10 @@ function DocumentDetailModal({ doc, onClose, onDeleted }) {
           <div><dt>Owner</dt><dd>{doc.owner} <small className="block-small">{doc.kind}</small></dd></div>
           <div><dt>Document type</dt><dd>{doc.type}</dd></div>
           <div><dt>Document number</dt><dd>{doc.number}</dd></div>
-          <div><dt>Expiry date</dt><dd>{doc.expiry || 'Not recorded'}</dd></div>
+          <div><dt>Expiry date</dt><dd>
+            {doc.expiry || 'Not recorded'}
+            {doc.expiryState !== 'none' && <> <Pill tone={EXPIRY_TONE[doc.expiryState]}>{expiryLabel(doc)}</Pill></>}
+          </dd></div>
           <div><dt>Status</dt><dd><Pill>{doc.status}</Pill></dd></div>
           <div><dt>File</dt><dd>{doc.fileName} <small className="block-small">{formatBytes(doc.sizeBytes)} — {doc.mimeType}</small></dd></div>
           <div><dt>Uploaded</dt><dd>{formatHistoryDate(doc.createdAt)}{doc.uploadedBy ? <small className="block-small">by {doc.uploadedBy}</small> : null}</dd></div>
@@ -2394,6 +2473,8 @@ function DocumentsPage({ drivers, vehicles, students }) {
   });
 
   return <section className="data-page">
+    <ExpiringDocuments/>
+
     <div className="panel table-panel">
       <div className="table-toolbar">
         <div><h2>Document centre</h2><p>{docs.length} document{docs.length === 1 ? '' : 's'} stored on the server</p></div>
@@ -2412,7 +2493,7 @@ function DocumentsPage({ drivers, vehicles, students }) {
       <div className="table-wrap">
         <table>
           <thead><tr>
-            <th>Owner</th><th>Document type</th><th>Number</th><th>Expiry</th>
+            <th>Owner</th><th>Document type</th><th>Number</th><th>Expiry</th><th>Time left</th>
             <th>Status</th><th>File</th><th>Uploaded</th><th></th>
           </tr></thead>
           <tbody>{rows.map(doc => <tr key={doc.id} className="clickable-row" onClick={() => setSelected(doc)}>
@@ -2420,6 +2501,9 @@ function DocumentsPage({ drivers, vehicles, students }) {
             <td>{doc.type}</td>
             <td>{doc.number}</td>
             <td>{doc.expiry || '-'}</td>
+            <td>{doc.expiryState === 'none'
+              ? <span className="muted-cell">-</span>
+              : <Pill tone={EXPIRY_TONE[doc.expiryState]}>{expiryLabel(doc)}</Pill>}</td>
             <td><Pill>{doc.status}</Pill></td>
             <td><div><span>{doc.fileName}</span><small className="block-small">{formatBytes(doc.sizeBytes)}</small></div></td>
             <td>{formatHistoryDate(doc.createdAt)}</td>

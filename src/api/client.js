@@ -260,6 +260,8 @@ export const api = {
   getGpsVehicleHistory: (vehicle, filters) =>
     request(`/gps/vehicles/${encodeURIComponent(vehicle)}/history${queryString(filters)}`),
   getDocuments: filters => request(`/documents${queryString(filters)}`),
+  // Documents already expired or expiring within `days` (default 30).
+  getExpiringDocuments: days => request(`/documents/expiring${queryString({ days })}`),
   uploadDocument: formData => upload('/documents', formData),
   downloadDocument: (id, fileName) => download(`/documents/${id}/file`, fileName),
   // Returns an object URL the caller must revoke when done with it.
