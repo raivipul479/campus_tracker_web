@@ -93,15 +93,15 @@ async function upload(path, formData) {
   return response.json();
 }
 
-// Documents are behind auth, so they cannot be fetched with a plain <a href>.
-// Pulled as a blob with the bearer token, then handed to the browser.
-async function download(path, fallbackName) {
+// Documents are behind auth, so they cannot be fetched with a plain <a href>
+// or an <img src>. Pulled as a blob with the bearer token instead.
+async function fetchBlob(path) {
   const session = getStoredSession();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}) }
   });
   if (!response.ok) {
-    let message = `Download failed with status ${response.status}`;
+    let message = `Request failed with status ${response.status}`;
     try {
       const payload = await response.json();
       message = payload?.error?.message || message;
@@ -110,13 +110,22 @@ async function download(path, fallbackName) {
     }
     throw new Error(message);
   }
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
+  return response.blob();
+}
+
+async function download(path, fallbackName) {
+  const url = URL.createObjectURL(await fetchBlob(path));
   const link = document.createElement('a');
   link.href = url;
   link.download = fallbackName || 'document';
   link.click();
   URL.revokeObjectURL(url);
+}
+
+// An object URL for previewing in place. The caller owns it and must revoke
+// it, or the blob is held in memory for the life of the page.
+async function objectUrl(path) {
+  return URL.createObjectURL(await fetchBlob(path));
 }
 
 export const api = {
@@ -253,6 +262,8 @@ export const api = {
   getDocuments: filters => request(`/documents${queryString(filters)}`),
   uploadDocument: formData => upload('/documents', formData),
   downloadDocument: (id, fileName) => download(`/documents/${id}/file`, fileName),
+  // Returns an object URL the caller must revoke when done with it.
+  documentPreviewUrl: id => objectUrl(`/documents/${id}/file`),
   deleteDocument: id => request(`/documents/${id}`, { method: 'DELETE' }),
   getGpsVehicles: async () => {
     const payload = await request('/gps/vehicles');

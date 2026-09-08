@@ -2273,10 +2273,95 @@ function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded 
   </div>;
 }
 
+function DocumentDetailModal({ doc, onClose, onDeleted }) {
+  const [preview, setPreview] = useState({ url: '', loading: true, error: '' });
+
+  // The file is behind auth, so it cannot be an <img src> or <iframe src>
+  // pointing at the API. Fetched as a blob and shown from an object URL, which
+  // must be revoked or the blob is held for the life of the page.
+  useEffect(() => {
+    let active = true;
+    let created = '';
+    setPreview({ url: '', loading: true, error: '' });
+    api.documentPreviewUrl(doc.id)
+      .then(url => {
+        created = url;
+        if (active) setPreview({ url, loading: false, error: '' });
+        else URL.revokeObjectURL(url);
+      })
+      .catch(error => { if (active) setPreview({ url: '', loading: false, error: error.message }); });
+    return () => {
+      active = false;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [doc.id]);
+
+  const isImage = doc.mimeType?.startsWith('image/');
+  const isPdf = doc.mimeType === 'application/pdf';
+
+  const remove = async () => {
+    if (!window.confirm(`Delete "${doc.fileName}"? The file is removed from the server as well.`)) return;
+    try {
+      await api.deleteDocument(doc.id);
+      await onDeleted();
+      onClose();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  };
+
+  return <div className="modal-backdrop" onClick={onClose}>
+    <div className="record-modal document-modal" onClick={event => event.stopPropagation()}>
+      <div className="modal-head">
+        <div>
+          <h2>{doc.type}</h2>
+          <p>{doc.owner} — {doc.kind}</p>
+        </div>
+        <button type="button" className="icon-btn" onClick={onClose}><Icon name="close"/></button>
+      </div>
+
+      <div className="document-detail">
+        <dl className="document-facts">
+          <div><dt>Owner</dt><dd>{doc.owner} <small className="block-small">{doc.kind}</small></dd></div>
+          <div><dt>Document type</dt><dd>{doc.type}</dd></div>
+          <div><dt>Document number</dt><dd>{doc.number}</dd></div>
+          <div><dt>Expiry date</dt><dd>{doc.expiry || 'Not recorded'}</dd></div>
+          <div><dt>Status</dt><dd><Pill>{doc.status}</Pill></dd></div>
+          <div><dt>File</dt><dd>{doc.fileName} <small className="block-small">{formatBytes(doc.sizeBytes)} — {doc.mimeType}</small></dd></div>
+          <div><dt>Uploaded</dt><dd>{formatHistoryDate(doc.createdAt)}{doc.uploadedBy ? <small className="block-small">by {doc.uploadedBy}</small> : null}</dd></div>
+          {doc.notes && <div className="full"><dt>Notes</dt><dd>{doc.notes}</dd></div>}
+        </dl>
+
+        <div className="document-preview">
+          {preview.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading preview...</div>}
+          {preview.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{preview.error}</span></div>}
+          {!preview.loading && !preview.error && preview.url && (
+            isImage ? <img src={preview.url} alt={doc.fileName}/>
+              : isPdf ? <iframe src={preview.url} title={doc.fileName}/>
+                // Anything else is downloadable but not shown: rendering an
+                // unknown type from a user-supplied file is not worth the risk.
+                : <div className="empty small-empty">No preview for this file type. Download it to view.</div>
+          )}
+        </div>
+      </div>
+
+      <div className="modal-actions">
+        <button type="button" className="text-action danger" onClick={remove}>Delete</button>
+        <button type="button" className="filter-btn" onClick={onClose}>Close</button>
+        <button type="button" className="primary-btn"
+          onClick={() => api.downloadDocument(doc.id, doc.fileName).catch(error => window.alert(error.message))}>
+          <Icon name="upload" size={15}/>Download
+        </button>
+      </div>
+    </div>
+  </div>;
+}
+
 function DocumentsPage({ drivers, vehicles, students }) {
   const [docs, setDocs] = useState([]);
   const [state, setState] = useState({ loading: true, error: '' });
   const [uploading, setUploading] = useState(false);
+  const [selected, setSelected] = useState(null);
   const [query, setQuery] = useState('');
 
   const load = async () => {
@@ -2330,7 +2415,7 @@ function DocumentsPage({ drivers, vehicles, students }) {
             <th>Owner</th><th>Document type</th><th>Number</th><th>Expiry</th>
             <th>Status</th><th>File</th><th>Uploaded</th><th></th>
           </tr></thead>
-          <tbody>{rows.map(doc => <tr key={doc.id}>
+          <tbody>{rows.map(doc => <tr key={doc.id} className="clickable-row" onClick={() => setSelected(doc)}>
             <td><div><strong>{doc.owner}</strong><small className="block-small">{doc.kind}</small></div></td>
             <td>{doc.type}</td>
             <td>{doc.number}</td>
@@ -2338,7 +2423,9 @@ function DocumentsPage({ drivers, vehicles, students }) {
             <td><Pill>{doc.status}</Pill></td>
             <td><div><span>{doc.fileName}</span><small className="block-small">{formatBytes(doc.sizeBytes)}</small></div></td>
             <td>{formatHistoryDate(doc.createdAt)}</td>
-            <td><div className="row-actions">
+            {/* stopPropagation so the row's detail view does not also open */}
+            <td onClick={event => event.stopPropagation()}><div className="row-actions">
+              <button className="text-action" onClick={() => setSelected(doc)}>View</button>
               <button className="text-action" onClick={() => api.downloadDocument(doc.id, doc.fileName).catch(error => window.alert(error.message))}>Download</button>
               <button className="text-action danger" onClick={() => remove(doc)}>Delete</button>
             </div></td>
@@ -2350,6 +2437,8 @@ function DocumentsPage({ drivers, vehicles, students }) {
         </div>}
       </div>
     </div>
+
+    {selected && <DocumentDetailModal doc={selected} onClose={() => setSelected(null)} onDeleted={load}/>}
 
     {uploading && <UploadDocumentModal
       drivers={drivers} vehicles={vehicles} students={students}
