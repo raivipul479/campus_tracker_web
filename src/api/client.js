@@ -263,9 +263,14 @@ export const api = {
   // Documents already expired or expiring within `days` (default 30).
   getExpiringDocuments: days => request(`/documents/expiring${queryString({ days })}`),
   uploadDocument: formData => upload('/documents', formData),
-  downloadDocument: (id, fileName) => download(`/documents/${id}/file`, fileName),
+  // Without a fileId this is the document's first file.
+  downloadDocument: (id, fileName, fileId) =>
+    download(fileId ? `/documents/${id}/files/${fileId}` : `/documents/${id}/file`, fileName),
   // Returns an object URL the caller must revoke when done with it.
-  documentPreviewUrl: id => objectUrl(`/documents/${id}/file`),
+  documentPreviewUrl: (id, fileId) =>
+    objectUrl(fileId ? `/documents/${id}/files/${fileId}` : `/documents/${id}/file`),
+  addDocumentFiles: (id, formData) => upload(`/documents/${id}/files`, formData),
+  deleteDocumentFile: (id, fileId) => request(`/documents/${id}/files/${fileId}`, { method: 'DELETE' }),
   deleteDocument: id => request(`/documents/${id}`, { method: 'DELETE' }),
   getGpsVehicles: async () => {
     const payload = await request('/gps/vehicles');

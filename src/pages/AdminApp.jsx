@@ -2232,6 +2232,7 @@ function PaymentsPage({ payments, students, feeDues, onAdd, onEdit, onDelete, on
 
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ACCEPTED_DOCUMENTS = '.pdf,.jpg,.jpeg,.png';
+const MAX_DOCUMENT_FILES = 10;
 
 const formatBytes = bytes => {
   if (!bytes) return '-';
@@ -2251,7 +2252,7 @@ function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded 
   const [values, setValues] = useState({
     ownerType: 'Driver', ownerId: '', docType: '', docNumber: '', expiryDate: '', status: 'Pending', notes: ''
   });
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [state, setState] = useState({ busy: false, error: '' });
 
   const owners = values.ownerType === 'Driver' ? drivers
@@ -2260,28 +2261,36 @@ function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded 
 
   const set = (name, value) => setValues(current => ({ ...current, [name]: value }));
 
-  const pickFile = event => {
-    const chosen = event.target.files?.[0];
-    if (!chosen) return setFile(null);
-    // Checked here for a quick answer; the server checks the contents too,
-    // since anything from the browser can be forged.
-    if (chosen.size > MAX_DOCUMENT_BYTES) {
-      setState({ busy: false, error: `That file is ${formatBytes(chosen.size)}. The limit is 10 MB.` });
-      setFile(null);
+  // A document can be several files: the front and back of a licence, the pages
+  // of a certificate. They upload together and stay together.
+  const pickFiles = event => {
+    const chosen = Array.from(event.target.files ?? []);
+    if (!chosen.length) return setFiles([]);
+    if (chosen.length > MAX_DOCUMENT_FILES) {
+      setState({ busy: false, error: `Up to ${MAX_DOCUMENT_FILES} files per document.` });
+      setFiles([]);
+      return;
+    }
+    // Checked here for a quick answer; the server checks each file's contents
+    // too, since anything from the browser can be forged.
+    const tooBig = chosen.find(file => file.size > MAX_DOCUMENT_BYTES);
+    if (tooBig) {
+      setState({ busy: false, error: `"${tooBig.name}" is ${formatBytes(tooBig.size)}. The limit is 10 MB per file.` });
+      setFiles([]);
       return;
     }
     setState({ busy: false, error: '' });
-    setFile(chosen);
+    setFiles(chosen);
   };
 
   const submit = async event => {
     event.preventDefault();
-    if (!file) return setState({ busy: false, error: 'Choose a file to upload.' });
+    if (!files.length) return setState({ busy: false, error: 'Choose at least one file to upload.' });
     if (!values.ownerId) return setState({ busy: false, error: `Choose a ${source.label.toLowerCase()}.` });
     setState({ busy: true, error: '' });
     try {
       const form = new FormData();
-      form.append('file', file);
+      files.forEach(item => form.append('files', item));
       Object.entries(values).forEach(([key, value]) => { if (value) form.append(key, value); });
       await api.uploadDocument(form);
       await onUploaded();
@@ -2294,7 +2303,7 @@ function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded 
   return <div className="modal-backdrop" onClick={onClose}>
     <form className="record-modal" onClick={event => event.stopPropagation()} onSubmit={submit}>
       <div className="modal-head">
-        <div><h2>Upload document</h2><p>PDF, JPEG or PNG, up to 10 MB</p></div>
+        <div><h2>Upload document</h2><p>PDF, JPEG or PNG, up to 10 MB each</p></div>
         <button type="button" className="icon-btn" onClick={onClose}><Icon name="close"/></button>
       </div>
 
@@ -2330,9 +2339,12 @@ function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded 
             {['Pending', 'Verified', 'Expiring', 'Expired'].map(item => <option key={item} value={item}>{item}</option>)}
           </select>
         </label>
-        <label className="full"><span>File *</span>
-          <input type="file" accept={ACCEPTED_DOCUMENTS} onChange={pickFile} disabled={state.busy}/>
-          {file && <small className="block-small">{file.name} — {formatBytes(file.size)}</small>}
+        <label className="full"><span>Files *</span>
+          <input type="file" accept={ACCEPTED_DOCUMENTS} multiple onChange={pickFiles} disabled={state.busy}/>
+          <small className="block-small">Choose several at once for a front and back, or multiple pages.</small>
+          {files.length > 0 && <ul className="file-chosen-list">
+            {files.map(item => <li key={item.name + item.size}>{item.name} — {formatBytes(item.size)}</li>)}
+          </ul>}
         </label>
         <label className="full"><span>Notes</span>
           <textarea value={values.notes} onChange={event => set('notes', event.target.value)} maxLength={255}/>
@@ -2351,29 +2363,64 @@ function UploadDocumentModal({ drivers, vehicles, students, onClose, onUploaded 
 
 function DocumentDetailModal({ doc, onClose, onDeleted }) {
   const [preview, setPreview] = useState({ url: '', loading: true, error: '' });
+  const [activeFileId, setActiveFileId] = useState(doc.files?.[0]?.id ?? null);
+  const [adding, setAdding] = useState(false);
+
+  const files = doc.files ?? [];
+  const active = files.find(file => file.id === activeFileId) ?? files[0] ?? null;
 
   // The file is behind auth, so it cannot be an <img src> or <iframe src>
   // pointing at the API. Fetched as a blob and shown from an object URL, which
   // must be revoked or the blob is held for the life of the page.
   useEffect(() => {
-    let active = true;
+    if (!active) return;
+    let running = true;
     let created = '';
     setPreview({ url: '', loading: true, error: '' });
-    api.documentPreviewUrl(doc.id)
+    api.documentPreviewUrl(doc.id, active.id)
       .then(url => {
         created = url;
-        if (active) setPreview({ url, loading: false, error: '' });
+        if (running) setPreview({ url, loading: false, error: '' });
         else URL.revokeObjectURL(url);
       })
-      .catch(error => { if (active) setPreview({ url: '', loading: false, error: error.message }); });
+      .catch(error => { if (running) setPreview({ url: '', loading: false, error: error.message }); });
     return () => {
-      active = false;
+      running = false;
       if (created) URL.revokeObjectURL(created);
     };
-  }, [doc.id]);
+  }, [doc.id, active?.id]);
 
-  const isImage = doc.mimeType?.startsWith('image/');
-  const isPdf = doc.mimeType === 'application/pdf';
+  const isImage = active?.mimeType?.startsWith('image/');
+  const isPdf = active?.mimeType === 'application/pdf';
+
+  const addFiles = async event => {
+    const chosen = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (!chosen.length) return;
+    setAdding(true);
+    try {
+      const form = new FormData();
+      chosen.forEach(item => form.append('files', item));
+      await api.addDocumentFiles(doc.id, form);
+      await onDeleted();
+      onClose();
+    } catch (error) {
+      window.alert(error.message);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const removeFile = async file => {
+    if (!window.confirm(`Remove "${file.fileName}" from this document?`)) return;
+    try {
+      await api.deleteDocumentFile(doc.id, file.id);
+      await onDeleted();
+      onClose();
+    } catch (error) {
+      window.alert(error.message);
+    }
+  };
 
   const remove = async () => {
     if (!window.confirm(`Delete "${doc.fileName}"? The file is removed from the server as well.`)) return;
@@ -2406,21 +2453,51 @@ function DocumentDetailModal({ doc, onClose, onDeleted }) {
             {doc.expiryState !== 'none' && <> <Pill tone={EXPIRY_TONE[doc.expiryState]}>{expiryLabel(doc)}</Pill></>}
           </dd></div>
           <div><dt>Status</dt><dd><Pill>{doc.status}</Pill></dd></div>
-          <div><dt>File</dt><dd>{doc.fileName} <small className="block-small">{formatBytes(doc.sizeBytes)} — {doc.mimeType}</small></dd></div>
+          <div><dt>Files</dt><dd>
+            {files.length} file{files.length === 1 ? '' : 's'}
+            <small className="block-small">{formatBytes(doc.sizeBytes)} in total</small>
+          </dd></div>
           <div><dt>Uploaded</dt><dd>{formatHistoryDate(doc.createdAt)}{doc.uploadedBy ? <small className="block-small">by {doc.uploadedBy}</small> : null}</dd></div>
           {doc.notes && <div className="full"><dt>Notes</dt><dd>{doc.notes}</dd></div>}
         </dl>
 
-        <div className="document-preview">
-          {preview.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading preview...</div>}
-          {preview.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{preview.error}</span></div>}
-          {!preview.loading && !preview.error && preview.url && (
-            isImage ? <img src={preview.url} alt={doc.fileName}/>
-              : isPdf ? <iframe src={preview.url} title={doc.fileName}/>
-                // Anything else is downloadable but not shown: rendering an
-                // unknown type from a user-supplied file is not worth the risk.
-                : <div className="empty small-empty">No preview for this file type. Download it to view.</div>
-          )}
+        <div className="document-preview-pane">
+          <div className="document-preview">
+            {preview.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading preview...</div>}
+            {preview.error && <div className="api-banner"><Icon name="alert" size={17}/><span>{preview.error}</span></div>}
+            {!preview.loading && !preview.error && preview.url && (
+              isImage ? <img src={preview.url} alt={active?.fileName}/>
+                : isPdf ? <iframe src={preview.url} title={active?.fileName}/>
+                  // Anything else is downloadable but not shown: rendering an
+                  // unknown type from a user-supplied file is not worth the risk.
+                  : <div className="empty small-empty">No preview for this file type. Download it to view.</div>
+            )}
+          </div>
+
+          <div className="document-files">
+            {files.map((file, index) => <button
+              key={file.id}
+              type="button"
+              className={`document-file ${file.id === active?.id ? 'selected' : ''}`}
+              onClick={() => setActiveFileId(file.id)}>
+              <span className="document-file-index">{index + 1}</span>
+              <span className="document-file-name">{file.fileName}</span>
+              <small>{formatBytes(file.sizeBytes)}</small>
+            </button>)}
+          </div>
+
+          <div className="document-file-actions">
+            <label className="filter-btn file-add">
+              <Icon name="plus" size={15}/>{adding ? 'Adding...' : 'Add files'}
+              <input type="file" accept={ACCEPTED_DOCUMENTS} multiple onChange={addFiles} disabled={adding}/>
+            </label>
+            {active && <button type="button" className="filter-btn"
+              onClick={() => api.downloadDocument(doc.id, active.fileName, active.id).catch(error => window.alert(error.message))}>
+              <Icon name="upload" size={15}/>Download this file
+            </button>}
+            {active && files.length > 1 && <button type="button" className="text-action danger"
+              onClick={() => removeFile(active)}>Remove this file</button>}
+          </div>
         </div>
       </div>
 
@@ -2429,7 +2506,7 @@ function DocumentDetailModal({ doc, onClose, onDeleted }) {
         <button type="button" className="filter-btn" onClick={onClose}>Close</button>
         <button type="button" className="primary-btn"
           onClick={() => api.downloadDocument(doc.id, doc.fileName).catch(error => window.alert(error.message))}>
-          <Icon name="upload" size={15}/>Download
+          <Icon name="upload" size={15}/>{files.length > 1 ? 'Download first file' : 'Download'}
         </button>
       </div>
     </div>
@@ -2505,7 +2582,10 @@ function DocumentsPage({ drivers, vehicles, students }) {
               ? <span className="muted-cell">-</span>
               : <Pill tone={EXPIRY_TONE[doc.expiryState]}>{expiryLabel(doc)}</Pill>}</td>
             <td><Pill>{doc.status}</Pill></td>
-            <td><div><span>{doc.fileName}</span><small className="block-small">{formatBytes(doc.sizeBytes)}</small></div></td>
+            <td><div>
+              <span>{doc.fileCount > 1 ? `${doc.fileCount} files` : doc.fileName}</span>
+              <small className="block-small">{formatBytes(doc.sizeBytes)}</small>
+            </div></td>
             <td>{formatHistoryDate(doc.createdAt)}</td>
             {/* stopPropagation so the row's detail view does not also open */}
             <td onClick={event => event.stopPropagation()}><div className="row-actions">

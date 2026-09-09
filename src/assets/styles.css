@@ -248,3 +248,18 @@ button:disabled .spinner{opacity:.85}
 .expiry-row small{font-size:10px;color:#8b95a4}
 .expiry-when{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
 .muted-cell{color:#9aa2ad}
+
+/* Documents with several files */
+.file-chosen-list{margin:6px 0 0;padding-left:18px;font-size:12px;color:#6f7b8e}
+.file-chosen-list li{padding:2px 0}
+.document-preview-pane{display:flex;flex-direction:column;gap:10px;min-width:0}
+.document-files{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px}
+.document-file{flex:0 0 auto;max-width:170px;display:flex;flex-direction:column;gap:2px;align-items:flex-start;
+  border:1px solid #e0e4ea;border-radius:8px;background:#fff;padding:8px 10px;text-align:left;color:#4a5668}
+.document-file.selected{border-color:var(--brand);background:#ecf8f2;color:#176747}
+.document-file-index{font-size:9px;font-weight:700;letter-spacing:.6px;color:#8b95a4}
+.document-file-name{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.document-file small{font-size:9px;color:#8b95a4}
+.document-file-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.file-add{position:relative;overflow:hidden;cursor:pointer}
+.file-add input{position:absolute;inset:0;opacity:0;cursor:pointer}
