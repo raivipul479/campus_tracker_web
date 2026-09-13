@@ -762,6 +762,61 @@ function VehicleMapBounds({ points }) {
   return null;
 }
 
+// Red, the same as the driver and parent apps, so direction reads the same
+// everywhere a route is drawn.
+const ROUTE_ARROW_COLOR = '#d32f2f';
+
+// Degrees clockwise from north, from one trail point to the next.
+function bearingDegrees(from, to) {
+  const rad = Math.PI / 180;
+  const lat1 = from.latitude * rad;
+  const lat2 = to.latitude * rad;
+  const dLng = (to.longitude - from.longitude) * rad;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (Math.atan2(y, x) / rad + 360) % 360;
+}
+
+function distanceMeters(from, to) {
+  const rad = Math.PI / 180;
+  const dLat = (to.latitude - from.latitude) * rad;
+  const dLng = (to.longitude - from.longitude) * rad;
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(from.latitude * rad) * Math.cos(to.latitude * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+
+// Leaflet has no built-in line decoration (the Google map draws its own
+// arrows), so place one arrow per ~400 m of track, mid-way along a segment and
+// pointing the way the bus drove it. Tiny segments are a parked bus's GPS
+// jitter, not travel, and would point an arrow somewhere random.
+function routeArrows(trail, spacingMeters = 400) {
+  const arrows = [];
+  let travelled = spacingMeters;
+  for (let i = 1; i < trail.length; i += 1) {
+    const from = trail[i - 1];
+    const to = trail[i];
+    const length = distanceMeters(from, to);
+    travelled += length;
+    if (travelled < spacingMeters || length < 15) continue;
+    travelled = 0;
+    arrows.push({
+      at: [(from.latitude + to.latitude) / 2, (from.longitude + to.longitude) / 2],
+      bearing: bearingDegrees(from, to)
+    });
+  }
+  return arrows;
+}
+
+function routeArrowIcon(bearing) {
+  return L.divIcon({
+    className: 'route-arrow',
+    html: `<svg width="16" height="16" viewBox="0 0 16 16" style="transform: rotate(${bearing.toFixed(1)}deg)"><path d="M8 1 L14 14 L8 10.5 L2 14 Z" fill="${ROUTE_ARROW_COLOR}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+}
+
 function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail = [] }) {
   if (!points.length) {
     return <div className="google-map-fallback"><MiniMap vehicles={fallbackVehicles} expanded/><div className="map-warning"><Icon name="clock" size={17}/><span>Waiting for GPS vehicle data...</span></div></div>;
@@ -780,6 +835,12 @@ function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail 
       {trail.length > 1 && <Polyline
         positions={trail.map(point => [point.latitude, point.longitude])}
         pathOptions={{ color: '#34b27b', weight: 4, opacity: 0.85 }}/>}
+      {routeArrows(trail).map((arrow, index) => <Marker
+        key={`route-arrow-${index}`}
+        position={arrow.at}
+        icon={routeArrowIcon(arrow.bearing)}
+        interactive={false}
+        keyboard={false}/>)}
       <Marker key={selectedPoint.id} position={[selectedPoint.latitude, selectedPoint.longitude]} icon={busMarkerIcon}>
         <Popup>
           <div className="map-popup">
@@ -861,7 +922,21 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
             path: trail.map(point => ({ lat: point.latitude, lng: point.longitude })),
             strokeColor: '#34b27b',
             strokeOpacity: 0.85,
-            strokeWeight: 4
+            strokeWeight: 4,
+            // Arrows along the line show which way the bus went. Spaced in
+            // screen pixels, so they stay evenly spread at any zoom.
+            icons: [{
+              icon: {
+                path: maps.SymbolPath.FORWARD_CLOSED_ARROW,
+                scale: 3,
+                fillColor: ROUTE_ARROW_COLOR,
+                fillOpacity: 1,
+                strokeColor: '#ffffff',
+                strokeWeight: 1
+              },
+              offset: '60px',
+              repeat: '120px'
+            }]
           });
         }
 
