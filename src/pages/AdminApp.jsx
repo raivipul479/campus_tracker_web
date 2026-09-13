@@ -2878,6 +2878,13 @@ function TrackingPage({ vehicles }) {
   const trailKey = selected?.vehicleCode || selected?.vehicleNo || '';
 
   // The path this bus has taken, shown behind its current position.
+  //
+  // Refetched whenever this bus reports a new position. It used to be keyed on
+  // gpsPoints.length -- the fleet size -- which does not change while a bus
+  // drives, so the trail was fetched once and froze while the marker kept
+  // moving. reportedAt changes exactly when the backend stores a new position
+  // for this bus, and stays put while it is parked, so nothing is refetched
+  // without something new to draw.
   useEffect(() => {
     if (!trailKey || !trailHours) {
       setTrail([]);
@@ -2893,7 +2900,7 @@ function TrackingPage({ vehicles }) {
       // point of this screen, the trail is context.
       .catch(() => { if (active) setTrail([]); });
     return () => { active = false; };
-  }, [trailKey, trailHours, gpsPoints.length]);
+  }, [trailKey, trailHours, selected?.reportedAt]);
 
   if (showHistory) {
     return <section className="fee-report-screen">
