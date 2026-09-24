@@ -1749,6 +1749,13 @@ const statusMark = status => (
 const formatLogTime = value => new Date(value)
   .toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
+// 'YYYY-MM-DD' of a timestamp in the browser's timezone.
+const localDateKey = value => {
+  const date = new Date(value);
+  const pad = number => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+
 const attendanceTone = pct => (pct >= 85 ? 'green' : pct >= 60 ? 'amber' : 'red');
 
 /**
@@ -1770,21 +1777,23 @@ function AttendanceDetailModal({ mode, row, month, operatingDates, onClose }) {
     let cancelled = false;
     setState({ loading: true, error: '' });
     const [year, monthNo] = month.split('-').map(Number);
-    // The log filter is inclusive at both ends, so `to` is the last instant of
-    // the month rather than midnight on the 1st of the next one.
-    const from = new Date(Date.UTC(year, monthNo - 1, 1)).toISOString();
-    const to = new Date(Date.UTC(year, monthNo, 1) - 1).toISOString();
+    // Local month boundaries, matching the server's school-timezone days. The
+    // log filter is inclusive at both ends, so `to` is the last instant of the
+    // month rather than midnight on the 1st of the next one.
+    const from = new Date(year, monthNo - 1, 1).toISOString();
+    const to = new Date(new Date(year, monthNo, 1).getTime() - 1).toISOString();
     api.getTransportLogs({ ...(isStudent ? { studentId: personId } : { driverId: personId }), from, to })
       .then(data => { if (!cancelled) { setLogs(data || []); setState({ loading: false, error: '' }); } })
       .catch(error => { if (!cancelled) { setLogs([]); setState({ loading: false, error: error.message }); } });
     return () => { cancelled = true; };
   }, [mode, personId, month, isStudent]);
 
-  // Bucketed on the UTC date, matching how the server groups logs into days.
+  // Bucketed on the local calendar date, matching the server, which groups logs
+  // by the school's (IST) day. A UTC date put 00:00-05:30 IST on the day before.
   const byDate = useMemo(() => {
     const map = new Map();
     for (const log of logs) {
-      const key = String(log.recordedAt).slice(0, 10);
+      const key = localDateKey(log.recordedAt);
       const entry = map.get(key) || { pickups: [], drops: [], students: new Set() };
       (log.action === 'Pickup' ? entry.pickups : entry.drops).push(log.recordedAt);
       entry.students.add(log.studentId);
