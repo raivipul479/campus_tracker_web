@@ -1800,10 +1800,17 @@ function AttendanceDetailModal({ mode, row, month, operatingDates, onClose }) {
 
   // ISO strings sort chronologically, so first/last need no date parsing.
   const detailFor = date => {
+    // Duty times come with the monthly report itself (row.duty), so they show
+    // even if the transport log fetch below fails.
+    const duty = (!isStudent && row.duty?.[date]) || {};
+    const checkIn = duty.checkIn ? formatLogTime(duty.checkIn) : '';
+    const checkOut = duty.checkOut ? formatLogTime(duty.checkOut) : '';
     const entry = byDate.get(date);
-    if (!entry) return { first: '', last: '', trips: 0, students: 0 };
+    if (!entry) return { checkIn, checkOut, first: '', last: '', trips: 0, students: 0 };
     const times = [...entry.pickups, ...entry.drops].sort();
     return {
+      checkIn,
+      checkOut,
       first: isStudent
         ? (entry.pickups.length ? formatLogTime(entry.pickups.slice().sort()[0]) : '')
         : (times.length ? formatLogTime(times[0]) : ''),
@@ -1817,13 +1824,13 @@ function AttendanceDetailModal({ mode, row, month, operatingDates, onClose }) {
 
   const headers = isStudent
     ? ['Date', 'Day', 'Status', 'Pickup', 'Drop', 'Logs']
-    : ['Date', 'Day', 'Status', 'First trip', 'Last trip', 'Trips', 'Students'];
+    : ['Date', 'Day', 'Status', 'Check-in', 'Check-out', 'First trip', 'Last trip', 'Trips', 'Students'];
 
   const exportRows = () => days.map(entry => {
     const detail = detailFor(entry.date);
     return isStudent
       ? [entry.date, entry.weekday, entry.status, detail.first, detail.last, detail.trips]
-      : [entry.date, entry.weekday, entry.status, detail.first, detail.last, detail.trips, detail.students];
+      : [entry.date, entry.weekday, entry.status, detail.checkIn, detail.checkOut, detail.first, detail.last, detail.trips, detail.students];
   });
 
   const slug = String(name || personId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -1878,6 +1885,8 @@ function AttendanceDetailModal({ mode, row, month, operatingDates, onClose }) {
               <td>{entry.date}</td>
               <td>{entry.weekday}</td>
               <td><Pill tone={statusTone(entry.status)}>{entry.status}</Pill></td>
+              {!isStudent && <td>{detail.checkIn || '-'}</td>}
+              {!isStudent && <td>{detail.checkOut || '-'}</td>}
               <td>{detail.first || '-'}</td>
               <td>{detail.last || '-'}</td>
               <td>{detail.trips || '-'}</td>
@@ -1953,12 +1962,12 @@ function AttendancePage({ routes }) {
     }
     return {
       name: `driver-attendance-${month}`,
-      headers: ['Driver', 'Phone', 'Vehicle', 'Status', ...dates, 'Days active', 'Days absent', 'Operating days', 'Attendance %', 'Trips logged', 'Students handled'],
+      headers: ['Driver', 'Phone', 'Vehicle', 'Status', ...dates, 'Days active', 'Days absent', 'Operating days', 'Attendance %', 'Duty check-ins', 'Trips logged', 'Students handled'],
       rows: rows.map(row => {
         const present = new Set(row.dates || []);
         const marks = dates.map(date => statusMark(present.has(date) ? 'Present' : 'Absent'));
         return [row.driver, row.phone, row.vehicle, row.status, ...marks,
-          row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.trips, row.studentsHandled];
+          row.presentDays, row.absentDays, operatingDays, row.attendancePct, row.dutyDays ?? 0, row.trips, row.studentsHandled];
       })
     };
   };
@@ -2019,7 +2028,7 @@ function AttendancePage({ routes }) {
         <table>
           <thead>{mode === 'students'
             ? <tr><th>Reg no</th><th>Student</th><th>Class</th><th>Route</th><th>Present</th><th>Absent</th><th>Attendance</th><th>Pickups</th><th>Drops</th><th>Last seen</th></tr>
-            : <tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Days active</th><th>Days absent</th><th>Attendance</th><th>Trips</th><th>Students</th><th>Last seen</th></tr>}
+            : <tr><th>Driver</th><th>Phone</th><th>Vehicle</th><th>Days active</th><th>Days absent</th><th>Attendance</th><th>Check-ins</th><th>Trips</th><th>Students</th><th>Last seen</th></tr>}
           </thead>
           <tbody>{mode === 'students'
             ? rows.map(row => <tr key={row.studentId} className="clickable-row" onClick={() => setSelected(row)} title={`Day-by-day attendance for ${row.student}`}>
@@ -2041,6 +2050,7 @@ function AttendancePage({ routes }) {
                 <td><strong>{row.presentDays}</strong> / {operatingDays}</td>
                 <td>{row.absentDays}</td>
                 <td><Pill tone={attendanceTone(row.attendancePct)}>{row.attendancePct}%</Pill></td>
+                <td>{row.dutyDays ?? 0}</td>
                 <td>{row.trips}</td>
                 <td>{row.studentsHandled}</td>
                 <td>{row.lastSeen ? formatHistoryDate(row.lastSeen) : '-'}</td>
