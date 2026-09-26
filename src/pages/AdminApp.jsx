@@ -656,7 +656,7 @@ function BulkAssignModal({ routes, onClose, onSave }) {
   const list = useInfiniteList(
     ({ offset, limit }) => api.getStudentsPage({ q: search, sort: 'name', dir: 'asc', offset, limit }),
     search,
-    STUDENT_PAGE_SIZE
+    LIST_PAGE_SIZE
   );
   const [bodyEl, setBodyEl] = useState(null);
   useEffect(() => { if (bodyEl) bodyEl.scrollTop = 0; }, [search, bodyEl]);
@@ -1469,8 +1469,9 @@ const driverFields = [
   { name: 'vehicle', label: 'Vehicle', type: 'select', options: ['Not assigned'], defaultValue: 'Not assigned' },
   { name: 'route', label: 'Assigned route', type: 'select', options: [], defaultValue: 'Not assigned' }
 ];
-// Rows fetched per scroll on the Students page and in bulk assign.
-const STUDENT_PAGE_SIZE = 50;
+// Rows fetched per scroll on the Students, Attendance and Documents lists and
+// in bulk assign.
+const LIST_PAGE_SIZE = 50;
 
 const studentFields = [
   { name: 'f', label: 'Sr. No.', required: true, maxLength: 32 },
@@ -1586,7 +1587,7 @@ function StudentsPage({ routes, feeDues, filters, onFiltersChange, onAdd, onEdit
   const list = useInfiniteList(
     ({ offset, limit }) => api.getStudentsPage({ ...filters, sort: sort.key, dir: sort.dir, offset, limit }),
     JSON.stringify([activeFilters, sort]),
-    STUDENT_PAGE_SIZE
+    LIST_PAGE_SIZE
   );
   // Adds, edits and deletes also refresh the shared student list the other
   // screens use; afterwards the rows loaded here are refetched in place.
@@ -1981,45 +1982,39 @@ function AttendancePage({ routes }) {
   const [month, setMonth] = useState(monthInputValue(new Date()));
   const [route, setRoute] = useState('all');
   const [query, setQuery] = useState('');
-  const [report, setReport] = useState(null);
-  const [state, setState] = useState({ loading: true, error: '' });
+  const [search, setSearch] = useState('');
+  useDebouncedEffect(() => setSearch(query.trim()), [query], 300);
   const [selected, setSelected] = useState(null);
+  const [exporting, setExporting] = useState('');
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ loading: true, error: '' });
-    // The open row belongs to the report being replaced, so close it.
-    setSelected(null);
-    const filters = mode === 'students'
-      ? { month, ...(route !== 'all' ? { routeId: route } : {}) }
-      : { month };
-    const load = mode === 'students' ? api.getStudentAttendance(filters) : api.getDriverAttendance(filters);
-    load
-      .then(data => { if (!cancelled) { setReport(data); setState({ loading: false, error: '' }); } })
-      .catch(error => { if (!cancelled) { setReport(null); setState({ loading: false, error: error.message }); } });
-    return () => { cancelled = true; };
-  }, [mode, month, route]);
+  const filters = mode === 'students'
+    ? { month, ...(route !== 'all' ? { routeId: route } : {}), ...(search ? { q: search } : {}) }
+    : { month, ...(search ? { q: search } : {}) };
+  const fetchReport = params => (mode === 'students' ? api.getStudentAttendance(params) : api.getDriverAttendance(params));
+  // Rows arrive 50 at a time as the table scrolls. The search runs on the
+  // server, and the summary cards come from the server over every matching
+  // row, not just the ones loaded so far.
+  const list = useInfiniteList(
+    ({ offset, limit }) => fetchReport({ ...filters, offset, limit }),
+    JSON.stringify([mode, filters]),
+    LIST_PAGE_SIZE
+  );
+  // The open row belongs to the report being replaced, so close it.
+  useEffect(() => { setSelected(null); }, [mode, month, route]);
 
-  const rows = useMemo(() => {
-    const all = report?.rows || [];
-    const text = query.trim().toLowerCase();
-    if (!text) return all;
-    return all.filter(row => [row.student, row.driver, row.regNo, row.phone, row.route, row.vehicle, row.class]
-      .some(field => String(field || '').toLowerCase().includes(text)));
-  }, [report, query]);
-
+  const report = list.meta;
+  const rows = list.rows;
+  const state = { loading: list.loading, error: list.error };
   const operatingDays = report?.operatingDays || 0;
-  // Averaged over the listed people, so filtering the list re-averages it.
-  const averagePct = rows.length
-    ? Math.round(rows.reduce((sum, row) => sum + (row.attendancePct || 0), 0) / rows.length)
-    : 0;
-  const fullAttendance = operatingDays ? rows.filter(row => row.presentDays === operatingDays).length : 0;
-  const neverPresent = rows.filter(row => !row.presentDays).length;
+  const { averagePct = 0, fullAttendance = 0, neverPresent = 0 } = report?.summary || {};
 
   // One column per operating day (P present / A absent / H on hold) followed by
   // the totals, so a single sheet serves as both the register and the summary.
-  const buildSheet = () => {
-    const dates = report?.dates || [];
+  // Built from the full report (every matching row), not the rows scrolled so far.
+  const buildSheet = full => {
+    const dates = full.dates || [];
+    const rows = full.rows || [];
+    const operatingDays = full.operatingDays || 0;
     if (mode === 'students') {
       return {
         name: `student-attendance-${month}`,
@@ -2044,20 +2039,24 @@ function AttendancePage({ routes }) {
     };
   };
 
-  const exportCsv = () => {
-    const sheet = buildSheet();
-    downloadCsv(`${sheet.name}.csv`, sheet.headers, sheet.rows);
-  };
-
-  const exportExcel = () => {
-    const sheet = buildSheet();
-    downloadXlsx(`${sheet.name}.xlsx`, monthLabel(month), sheet.headers, sheet.rows);
+  // Without a limit the server returns every row matching the current filters.
+  const exportSheet = async kind => {
+    setExporting(kind);
+    try {
+      const sheet = buildSheet(await fetchReport(filters));
+      if (kind === 'csv') downloadCsv(`${sheet.name}.csv`, sheet.headers, sheet.rows);
+      else downloadXlsx(`${sheet.name}.xlsx`, monthLabel(month), sheet.headers, sheet.rows);
+    } catch (error) {
+      window.alert(error.message || 'Unable to export attendance.');
+    } finally {
+      setExporting('');
+    }
   };
 
   return <section className="attendance-screen">
     <section className="stats-grid compact">
       <StatCard label="Operating days" value={operatingDays} change={monthLabel(report?.month || month)} detail="days transport ran" icon="clock" tone="blue"/>
-      <StatCard label={mode === 'students' ? 'Students' : 'Drivers'} value={rows.length} change="Listed" detail="in this view" icon={mode === 'students' ? 'student' : 'users'} tone="blue"/>
+      <StatCard label={mode === 'students' ? 'Students' : 'Drivers'} value={list.total} change="Listed" detail="in this view" icon={mode === 'students' ? 'student' : 'users'} tone="blue"/>
       <StatCard label="Average attendance" value={`${averagePct}%`} change={`${fullAttendance} full`} detail="of operating days" icon="check" tone={attendanceTone(averagePct)}/>
       <StatCard label="No activity" value={neverPresent} change="Zero days" detail={mode === 'students' ? 'students' : 'drivers'} icon="alert" tone={neverPresent ? 'amber' : 'green'}/>
     </section>
@@ -2071,8 +2070,8 @@ function AttendancePage({ routes }) {
         <div className="panel-actions">
           <button type="button" className={`filter-btn ${mode === 'students' ? 'active' : ''}`} onClick={() => setMode('students')}><Icon name="student" size={15}/>Students</button>
           <button type="button" className={`filter-btn ${mode === 'drivers' ? 'active' : ''}`} onClick={() => setMode('drivers')}><Icon name="users" size={15}/>Drivers</button>
-          <button type="button" className="filter-btn" onClick={exportCsv} disabled={!rows.length}><Icon name="upload" size={15}/>Export CSV</button>
-          <button type="button" className="filter-btn" onClick={exportExcel} disabled={!rows.length}><Icon name="upload" size={15}/>Export Excel</button>
+          <button type="button" className="filter-btn" onClick={() => exportSheet('csv')} disabled={!rows.length || Boolean(exporting)}>{exporting === 'csv' ? <span className="spinner spinner-sm"/> : <Icon name="upload" size={15}/>}Export CSV</button>
+          <button type="button" className="filter-btn" onClick={() => exportSheet('xlsx')} disabled={!rows.length || Boolean(exporting)}>{exporting === 'xlsx' ? <span className="spinner spinner-sm"/> : <Icon name="upload" size={15}/>}Export Excel</button>
         </div>
       </div>
 
@@ -2131,7 +2130,11 @@ function AttendancePage({ routes }) {
         </table>
         {state.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading attendance...</div>}
         {!state.loading && !state.error && operatingDays > 0 && !rows.length && <div className="empty small-empty">No one matches this filter.</div>}
+        <LoadMoreSentinel onVisible={list.loadMore} hasMore={list.hasMore} loading={list.loadingMore} rowCount={rows.length} error={rows.length ? list.error : ''}/>
       </div>
+      {!state.loading && rows.length > 0 && <div className="table-footer"><span>
+        Showing {rows.length} of {list.total} {mode === 'students' ? 'students' : 'drivers'}{list.hasMore ? ' · scroll for more' : ''}
+      </span></div>}
     </div>
 
     {selected && <AttendanceDetailModal
@@ -2671,24 +2674,23 @@ function DocumentDetailModal({ doc, onClose, onDeleted }) {
 }
 
 function DocumentsPage({ drivers, vehicles, students }) {
-  const [docs, setDocs] = useState([]);
-  const [state, setState] = useState({ loading: true, error: '' });
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
+  useDebouncedEffect(() => setSearch(query.trim()), [query], 300);
 
-  const load = async () => {
-    setState({ loading: true, error: '' });
-    try {
-      setDocs(await api.getDocuments({}));
-      setState({ loading: false, error: '' });
-    } catch (error) {
-      setDocs([]);
-      setState({ loading: false, error: error.message });
-    }
-  };
-
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+  // Newest first, 50 at a time as the table scrolls. The search (type, number,
+  // file name and owner) runs on the server.
+  const list = useInfiniteList(
+    ({ offset, limit }) => api.getDocuments({ ...(search ? { q: search } : {}), offset, limit }),
+    search,
+    LIST_PAGE_SIZE
+  );
+  const rows = list.rows;
+  const state = { loading: list.loading, error: list.error };
+  // Refetches what has been scrolled so far in place, after an upload or delete.
+  const load = list.reload;
 
   const remove = async doc => {
     if (!window.confirm(`Delete "${doc.fileName}"? The file is removed from the server as well.`)) return;
@@ -2700,18 +2702,12 @@ function DocumentsPage({ drivers, vehicles, students }) {
     }
   };
 
-  const rows = docs.filter(doc => {
-    const text = query.trim().toLowerCase();
-    if (!text) return true;
-    return [doc.owner, doc.type, doc.number, doc.fileName].some(v => String(v || '').toLowerCase().includes(text));
-  });
-
   return <section className="data-page">
     <ExpiringDocuments/>
 
     <div className="panel table-panel">
       <div className="table-toolbar">
-        <div><h2>Document centre</h2><p>{docs.length} document{docs.length === 1 ? '' : 's'} stored on the server</p></div>
+        <div><h2>Document centre</h2><p>{state.loading ? 'Loading documents…' : `${list.total} document${list.total === 1 ? '' : 's'}${search ? ' match this search' : ' stored on the server'}`}</p></div>
         <div className="toolbar-actions">
           <label className="table-search"><Icon name="search" size={16}/>
             <input placeholder="Search documents..." value={query} onChange={event => setQuery(event.target.value)}/>
@@ -2753,10 +2749,14 @@ function DocumentsPage({ drivers, vehicles, students }) {
           </tr>)}</tbody>
         </table>
         {state.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading documents...</div>}
-        {!state.loading && !rows.length && <div className="empty small-empty">
-          {docs.length ? 'No documents match this search.' : 'No documents uploaded yet.'}
+        {!state.loading && !state.error && !rows.length && <div className="empty small-empty">
+          {search ? 'No documents match this search.' : 'No documents uploaded yet.'}
         </div>}
+        <LoadMoreSentinel onVisible={list.loadMore} hasMore={list.hasMore} loading={list.loadingMore} rowCount={rows.length} error={rows.length ? list.error : ''}/>
       </div>
+      {!state.loading && rows.length > 0 && <div className="table-footer"><span>
+        Showing {rows.length} of {list.total} documents{list.hasMore ? ' · scroll for more' : ''}
+      </span></div>}
     </div>
 
     {selected && <DocumentDetailModal doc={selected} onClose={() => setSelected(null)} onDeleted={load}/>}

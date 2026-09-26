@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 // The server caps one request at 200 rows.
 const MAX_REQUEST = 200;
 
-const emptyState = { rows: [], total: 0, nextOffset: 0, loading: true, loadingMore: false, error: '' };
+const emptyState = { key: undefined, rows: [], total: 0, nextOffset: 0, meta: null, loading: true, loadingMore: false, error: '' };
 
 /**
  * Server-side list loaded a page at a time as the user scrolls.
@@ -12,6 +12,13 @@ const emptyState = { rows: [], total: 0, nextOffset: 0, loading: true, loadingMo
  * with nextOffset null after the last page. The list starts over whenever
  * `resetKey` changes (a new search, filter or sort). Responses for an older
  * key are ignored, so a slow page can never land in a newer search's list.
+ *
+ * `meta` is the latest response itself, for anything it carries besides the
+ * rows (a report's summary figures, for example).
+ *
+ * Rows are tagged with the key they were loaded for. On the render where the
+ * key changes, before the effect below resets the list, the previous rows are
+ * hidden rather than drawn under the new search or mode.
  *
  * `reload()` refetches everything loaded so far in place, keeping the scroll
  * position, for use after an add, edit or delete.
@@ -28,15 +35,15 @@ export function useInfiniteList(fetchPage, resetKey, pageSize = 50) {
   useEffect(() => {
     const current = ++generation.current;
     busy.current = true;
-    setState(emptyState);
+    setState({ ...emptyState, key: resetKey });
     fetchRef.current({ offset: 0, limit: pageSize })
       .then(page => {
         if (current !== generation.current) return;
-        setState({ rows: page.rows, total: page.total, nextOffset: page.nextOffset, loading: false, loadingMore: false, error: '' });
+        setState({ key: resetKey, rows: page.rows, total: page.total, nextOffset: page.nextOffset, meta: page, loading: false, loadingMore: false, error: '' });
       })
       .catch(error => {
         if (current !== generation.current) return;
-        setState({ ...emptyState, loading: false, error: error.message || 'Unable to load.' });
+        setState({ ...emptyState, key: resetKey, loading: false, error: error.message || 'Unable to load.' });
       })
       .finally(() => { if (current === generation.current) busy.current = false; });
   }, [resetKey, pageSize]);
@@ -50,7 +57,7 @@ export function useInfiniteList(fetchPage, resetKey, pageSize = 50) {
     fetchRef.current({ offset: nextOffset, limit: pageSize })
       .then(page => {
         if (current !== generation.current) return;
-        setState(prev => ({ ...prev, rows: [...prev.rows, ...page.rows], total: page.total, nextOffset: page.nextOffset, loadingMore: false }));
+        setState(prev => ({ ...prev, rows: [...prev.rows, ...page.rows], total: page.total, nextOffset: page.nextOffset, meta: page, loadingMore: false }));
       })
       .catch(error => {
         if (current !== generation.current) return;
@@ -71,7 +78,7 @@ export function useInfiniteList(fetchPage, resetKey, pageSize = 50) {
         if (current !== generation.current) return;
         rows = [...rows, ...page.rows];
       }
-      setState({ rows, total: page.total, nextOffset: page.nextOffset, loading: false, loadingMore: false, error: '' });
+      setState(prev => ({ key: prev.key, rows, total: page.total, nextOffset: page.nextOffset, meta: page, loading: false, loadingMore: false, error: '' }));
     } catch (error) {
       if (current === generation.current) setState(prev => ({ ...prev, error: error.message || 'Unable to refresh.' }));
     } finally {
@@ -79,5 +86,6 @@ export function useInfiniteList(fetchPage, resetKey, pageSize = 50) {
     }
   }, [pageSize]);
 
+  if (state.key !== resetKey) return { ...emptyState, key: resetKey, hasMore: false, loadMore, reload };
   return { ...state, hasMore: state.nextOffset !== null, loadMore, reload };
 }
