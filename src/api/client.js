@@ -136,6 +136,8 @@ export const api = {
   }),
   getCurrentSuperAdmin: () => request('/auth/super-admin/me'),
   getStudents: filters => request(`/students${queryString(filters)}`),
+  // One page: { rows, total, offset, limit, nextOffset } (nextOffset null at the end).
+  getStudentsPage: params => request(`/students${queryString(params)}`),
   createStudent: student => request('/students', {
     method: 'POST',
     body: JSON.stringify(student)

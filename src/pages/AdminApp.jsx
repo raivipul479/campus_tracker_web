@@ -6,6 +6,8 @@ import '../assets/global.css';
 import { Pill } from '../components/Pill.jsx';
 import { AdimoveLogo } from '../components/AdimoveLogo.jsx';
 import { useDebouncedEffect } from '../hooks/useDebouncedEffect.js';
+import { useInfiniteList } from '../hooks/useInfiniteList.js';
+import { LoadMoreSentinel } from '../components/LoadMoreSentinel.jsx';
 import { campusService as api } from '../services/campusService.js';
 import { clearStoredSession, getStoredSession, SESSION_EXPIRED_EVENT, setStoredSession } from '../api/client.js';
 import { amountsEqual, currentMonthKey, currentMonthLabel, dash, dateInputValue, formatCurrency, initialsFor, parseAmount, quarterKeyForDate, roundToPaise, safeText } from '../utils/formatters.js';
@@ -621,23 +623,24 @@ function ImportStudentsModal({ onClose, onImported }) {
   </div>;
 }
 
-function BulkAssignModal({ students, routes, onClose, onSave }) {
+function BulkAssignModal({ routes, onClose, onSave }) {
   const [query, setQuery] = useState('');
-  // Only user-changed selections are stored here. The displayed value is derived
-  // fresh on every render (defaulting to the student's current routeId) so it can
-  // never get stuck showing stale data if students/routes finish loading after
-  // this modal first mounts.
+  const [search, setSearch] = useState('');
+  useDebouncedEffect(() => setSearch(query.trim()), [query], 300);
+  // Only user-changed selections are stored here, keyed by student id, each
+  // with the student's route at the time. Rows come and go as the search
+  // changes, so the saved changes can't be derived from the rows on screen.
   const [overrides, setOverrides] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const studentKey = student => student.studentId ?? student.id;
-  const valueFor = student => {
-    const id = studentKey(student);
-    if (Object.prototype.hasOwnProperty.call(overrides, id)) return overrides[id];
-    return student.routeId ? `${student.routeId}:${student.slabId ?? ''}` : '';
-  };
-  const setSelection = (studentId, routeId) => setOverrides(current => ({ ...current, [studentId]: routeId }));
+  const currentValue = student => (student.routeId ? `${student.routeId}:${student.slabId ?? ''}` : '');
+  const valueFor = student => overrides[studentKey(student)]?.value ?? currentValue(student);
+  const setSelection = (student, value) => setOverrides(current => ({
+    ...current,
+    [studentKey(student)]: { value, current: currentValue(student) }
+  }));
   // "<routeId>:<slabId>" in one control — picking the route and the slab as two
   // dropdowns per row would double the width of an already dense table.
   const routeChoices = useMemo(() => routes.map(route => ({
@@ -647,25 +650,30 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
       : [{ value: `${route.routeId}:`, label: `${route.id} · ${route.name}` }]
   })), [routes]);
 
-  const visibleStudents = students.filter(student =>
-    [student.name, student.area, student.address, student.guardianName, student.phone, student.class, student.section].map(safeText).join(' ').toLowerCase().includes(safeText(query).toLowerCase())
+  // Searched on the server and loaded 50 at a time as the list scrolls, so the
+  // modal opens with one page of rows (each with a dropdown of every route and
+  // slab) instead of the whole school.
+  const list = useInfiniteList(
+    ({ offset, limit }) => api.getStudentsPage({ q: search, sort: 'name', dir: 'asc', offset, limit }),
+    search,
+    STUDENT_PAGE_SIZE
   );
+  const [bodyEl, setBodyEl] = useState(null);
+  useEffect(() => { if (bodyEl) bodyEl.scrollTop = 0; }, [search, bodyEl]);
+
+  // Every changed student, including ones no longer on screen after a new search.
+  const assignments = Object.entries(overrides)
+    .map(([id, { value, current }]) => {
+      // "Not assigned" is not applied, and unchanged rows are skipped, including
+      // a slab-only change, which is how a student's fee is corrected without
+      // moving them off their bus.
+      if (!value || value === current) return null;
+      const [routeId, slabId] = value.split(':');
+      return { studentId: Number(id), routeId: Number(routeId), ...(slabId ? { slabId: Number(slabId) } : {}) };
+    })
+    .filter(Boolean);
 
   const submit = async () => {
-    const assignments = students
-      .map(student => {
-        const id = studentKey(student);
-        const selected = valueFor(student);
-        if (!selected) return null;
-        // Unchanged rows are skipped, including a slab-only change, which is how
-        // a student's fee is corrected without moving them off their bus.
-        const current = student.routeId ? `${student.routeId}:${student.slabId ?? ''}` : '';
-        if (selected === current) return null;
-        const [routeId, slabId] = selected.split(':');
-        return { studentId: Number(id), routeId: Number(routeId), ...(slabId ? { slabId: Number(slabId) } : {}) };
-      })
-      .filter(Boolean);
-
     if (!assignments.length) {
       setError('Choose at least one changed route before saving.');
       return;
@@ -693,19 +701,19 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
         <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={17}/></button>
       </div>
       <label className="table-search bulk-assign-search"><Icon name="search" size={16}/><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search students..."/></label>
-      <div className="bulk-assign-body">
+      <div className="bulk-assign-body" ref={setBodyEl}>
         <div className="bulk-assign-table" role="table">
           <div className="bulk-assign-row bulk-assign-head" role="row">
             <span>Student</span><span>Class</span><span>Area</span><span>Phone</span><span>Route</span>
           </div>
-          {visibleStudents.map(student => {
+          {list.rows.map(student => {
             const id = studentKey(student);
             return <div className="bulk-assign-row" role="row" key={id}>
               <span title={student.name}><strong>{student.name}</strong></span>
               <span title={student.class}>{student.class}</span>
               <span title={student.area}>{student.area}</span>
               <span title={student.phone}>{student.phone}</span>
-              <span><select value={valueFor(student)} onChange={event => setSelection(id, event.target.value)}>
+              <span><select value={valueFor(student)} onChange={event => setSelection(student, event.target.value)}>
                 <option value="">Not assigned</option>
                 {/* One row per route, or per slab where the route has them, so
                     the fee is chosen at the same time as the bus. */}
@@ -716,12 +724,18 @@ function BulkAssignModal({ students, routes, onClose, onSave }) {
             </div>;
           })}
         </div>
-        {!visibleStudents.length && <div className="empty small-empty">No matching students.</div>}
+        {list.loading && <div className="empty small-empty loading-inline"><span className="spinner"/>Loading students…</div>}
+        {!list.loading && !list.rows.length && <div className="empty small-empty">{list.error || 'No matching students.'}</div>}
+        {bodyEl && <LoadMoreSentinel root={bodyEl} onVisible={list.loadMore} hasMore={list.hasMore} loading={list.loadingMore} rowCount={list.rows.length} error={list.rows.length ? list.error : ''}/>}
       </div>
       {error && <div className="form-error">{error}</div>}
       <div className="modal-actions">
+        <span className="bulk-assign-changes">
+          {list.loading ? '' : `Showing ${list.rows.length} of ${list.total}`}
+          {assignments.length ? ` · ${assignments.length} change${assignments.length === 1 ? '' : 's'} to save` : ''}
+        </span>
         <button type="button" className="filter-btn" onClick={onClose} disabled={saving}>Cancel</button>
-        <button type="button" className="primary-btn" onClick={submit} disabled={saving}>{saving ? <span className="spinner"/> : <Icon name="check" size={16}/>}{saving ? 'Saving...' : 'Save assignments'}</button>
+        <button type="button" className="primary-btn" onClick={submit} disabled={saving}>{saving ? <span className="spinner"/> : <Icon name="check" size={16}/>}{saving ? 'Saving...' : `Save assignments${assignments.length ? ` (${assignments.length})` : ''}`}</button>
       </div>
     </div>
   </div>;
@@ -1183,10 +1197,14 @@ function BaseDataPage({ type, data, columns, subtitle, action, children }) {
   </section>;
 }
 
-function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, onRemind, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues, loading = false }) {
+function DataPage({ type, data, columns, subtitle, action, children, fields = [], onAdd, onEdit, onDelete, onHistory, onRemind, createRecord, serverFilters = false, filters = {}, filterFields = [], onFiltersChange, secondaryAction, extraActions = [], deriveValues, loading = false, sort: controlledSort, onSortChange, infinite }) {
   const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
-  const [sort, setSort] = useState({ key: null, dir: 'asc' });
+  const [localSort, setLocalSort] = useState({ key: null, dir: 'asc' });
+  // With onSortChange the parent owns the sort and the server applies it (a
+  // list loaded page by page can't be sorted in the browser); otherwise the
+  // rows are sorted here.
+  const sort = onSortChange ? controlledSort : localSort;
   const resolveFields = values => typeof fields === 'function' ? fields(values) : fields;
   const [formValues, setFormValues] = useState(() => emptyForm(resolveFields({})));
   const [editingRow, setEditingRow] = useState(null);
@@ -1200,17 +1218,21 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
     [data, query, serverFilters]
   );
   const sorted = useMemo(() => {
-    if (!sort.key) return filtered;
+    if (onSortChange || !sort.key) return filtered;
     const copy = [...filtered];
     copy.sort((a, b) => {
       const result = compareSortValues(a[sort.key], b[sort.key]);
       return sort.dir === 'asc' ? result : -result;
     });
     return copy;
-  }, [filtered, sort]);
-  const toggleSort = key => setSort(current => current.key === key
-    ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
-    : { key, dir: 'asc' });
+  }, [filtered, sort, onSortChange]);
+  const toggleSort = column => {
+    if (column.sortable === false) return;
+    const next = sort.key === column.key
+      ? { key: column.key, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
+      : { key: column.key, dir: 'asc' };
+    if (onSortChange) onSortChange(next); else setLocalSort(next);
+  };
   useDebouncedEffect(() => {
     if (!serverFilters || !onFiltersChange) return;
     onFiltersChange({ ...filters, q: query });
@@ -1304,9 +1326,11 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
       </div>
       <div className="table-wrap">
         <table>
-          <thead><tr>{columns.map(column => <th key={column.key} className="sortable-th" onClick={() => toggleSort(column.key)}>
-            {column.label}<span className={`sort-arrow ${sort.key === column.key ? 'active' : ''}`}>{sort.key === column.key && sort.dir === 'desc' ? '▼' : '▲'}</span>
-          </th>)}<th></th></tr></thead>
+          <thead><tr>{columns.map(column => column.sortable === false
+            ? <th key={column.key}>{column.label}</th>
+            : <th key={column.key} className="sortable-th" onClick={() => toggleSort(column)}>
+              {column.label}<span className={`sort-arrow ${sort.key === column.key ? 'active' : ''}`}>{sort.key === column.key && sort.dir === 'desc' ? '▼' : '▲'}</span>
+            </th>)}<th></th></tr></thead>
           <tbody>{sorted.map((row, index) => {
             const rowId = row.id || row.regNo || row.name || row.owner;
             const isDeleting = deletingId === rowId;
@@ -1316,9 +1340,12 @@ function DataPage({ type, data, columns, subtitle, action, children, fields = []
             </tr>;
           })}</tbody>
         </table>
-        {!filtered.length && <div className="empty">No matching records found.</div>}
+        {!filtered.length && !(infinite && loading) && <div className="empty">No matching records found.</div>}
+        {infinite && <LoadMoreSentinel onVisible={infinite.onLoadMore} hasMore={infinite.hasMore} loading={infinite.loadingMore} rowCount={data.length} error={infinite.error}/>}
       </div>
-      <div className="table-footer"><span>Showing {sorted.length} of {data.length} records</span></div>
+      <div className="table-footer"><span>{infinite
+        ? `Showing ${data.length} of ${infinite.total} ${type.toLowerCase()}${infinite.hasMore ? ' · scroll for more' : ''}`
+        : `Showing ${sorted.length} of ${data.length} records`}</span></div>
     </div>
     {modalOpen && <RecordModal title={editingRow ? `Edit ${type}` : action} fields={resolveFields(formValues)} values={formValues} setValues={setFormValues} onClose={() => !saving && setModalOpen(false)} onSubmit={submitForm} saving={saving} error={formError} deriveValues={deriveValues}/>}
   </section>;
@@ -1442,6 +1469,9 @@ const driverFields = [
   { name: 'vehicle', label: 'Vehicle', type: 'select', options: ['Not assigned'], defaultValue: 'Not assigned' },
   { name: 'route', label: 'Assigned route', type: 'select', options: [], defaultValue: 'Not assigned' }
 ];
+// Rows fetched per scroll on the Students page and in bulk assign.
+const STUDENT_PAGE_SIZE = 50;
+
 const studentFields = [
   { name: 'f', label: 'Sr. No.', required: true, maxLength: 32 },
   { name: 'regNo', label: 'Reg. No.', required: true, minLength: 3, maxLength: 64 },
@@ -1544,10 +1574,42 @@ function DriversPage({ drivers, vehicles, routes, filters, onFiltersChange, onAd
   ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}</DataPage>;
 }
 
-function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onRemind, onBulkAssign, onImported, loading }) {
+function StudentsPage({ routes, feeDues, filters, onFiltersChange, onAdd, onEdit, onDelete, onRemind, onBulkAssign, onImported }) {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const studentRows = students.map(student => ({ ...student, totalDue: totalDueForStudent(feeDues, student) }));
+  const [sort, setSort] = useState({ key: 'name', dir: 'asc' });
+  // Loaded from the server 50 at a time as the table scrolls, already searched,
+  // filtered and sorted there. Starts over on any filter or sort change.
+  // Empty and "all" filters are dropped from the key, so the search box's
+  // initial q: '' doesn't count as a new search and refetch the first page.
+  const activeFilters = Object.entries(filters).filter(([, value]) => value && value !== 'all').sort();
+  const list = useInfiniteList(
+    ({ offset, limit }) => api.getStudentsPage({ ...filters, sort: sort.key, dir: sort.dir, offset, limit }),
+    JSON.stringify([activeFilters, sort]),
+    STUDENT_PAGE_SIZE
+  );
+  // Adds, edits and deletes also refresh the shared student list the other
+  // screens use; afterwards the rows loaded here are refetched in place.
+  const thenReload = handler => async (...args) => {
+    const result = await handler?.(...args);
+    await list.reload();
+    return result;
+  };
+  // A lookup by student id rather than totalDueForStudent's scan of every fee
+  // due per row. The first matching due wins, as with Array.find.
+  const studentRows = useMemo(() => {
+    const month = currentMonthKey();
+    const dueByStudent = new Map();
+    for (const due of feeDues) {
+      const id = Number(due.studentId);
+      if (due.month === month && !dueByStudent.has(id)) dueByStudent.set(id, due);
+    }
+    return list.rows.map(student => {
+      const due = dueByStudent.get(Number(student.studentId ?? student.id));
+      const totalDue = Math.max(0, roundToPaise(due ? due.balance : student.monthlyDue));
+      return { ...student, totalDue };
+    });
+  }, [list.rows, feeDues]);
   const columns = [
     {key:'f',label:'Sr. No.',render:r=><strong>{r.f}</strong>},
     {key:'regNo',label:'Reg. No.'},
@@ -1559,9 +1621,10 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
     {key:'guardianName',label:"Father's / Mother's name",render:r=>dash(r.guardianName)},
     {key:'kms',label:'Kms',render:r=>dash(r.kms)},
     {key:'tagNo',label:'Tag No.',render:r=><Pill tone="blue">{r.tagNo}</Pill>},
-    {key:'route',label:'Route',render:r=>dash(r.route)},
-    {key:'monthlyDue',label:'Monthly due',render:r=><strong>{formatCurrency(r.monthlyDue)}</strong>},
-    {key:'totalDue',label:'Total due',render:r=><strong>{formatCurrency(r.totalDue)}</strong>},
+    // Route and fees come from other tables, so the server can't sort by them.
+    {key:'route',label:'Route',sortable:false,render:r=>dash(r.route)},
+    {key:'monthlyDue',label:'Monthly due',sortable:false,render:r=><strong>{formatCurrency(r.monthlyDue)}</strong>},
+    {key:'totalDue',label:'Total due',sortable:false,render:r=><strong>{formatCurrency(r.totalDue)}</strong>},
     {key:'area',label:'Area'},
     {key:'address',label:'Address',render:r=>dash(r.address)},
     {key:'phone',label:'Phone Number'},
@@ -1594,10 +1657,10 @@ function StudentsPage({ students, routes, feeDues, filters, onFiltersChange, onA
       to: item.unassignedAt
     })
   );
-  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={`${students.length} students imported from JPIS transport list`} action="Add student" fields={fields} deriveValues={deriveStudentValues} onAdd={onAdd} onEdit={onEdit} onDelete={onDelete} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Import sheet', icon: 'upload', onClick: () => setImportOpen(true) }, { label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={loading} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
+  return <DataPage type="Students" data={studentRows} columns={columns} subtitle={list.loading ? 'Loading students…' : `${list.total} students${filters.q || (filters.assigned && filters.assigned !== 'all') || (filters.routeId && filters.routeId !== 'all') ? ' match these filters' : ' imported from JPIS transport list'}`} action="Add student" fields={fields} deriveValues={deriveStudentValues} onAdd={thenReload(onAdd)} onEdit={thenReload(onEdit)} onDelete={thenReload(onDelete)} onRemind={onRemind} onHistory={row => openHistory(row, `${row.name} · Route history`, 'Routes this student has been assigned to over time')} extraActions={[{ label: 'Import sheet', icon: 'upload', onClick: () => setImportOpen(true) }, { label: 'Bulk assign', icon: 'route', onClick: () => setBulkOpen(true) }]} loading={list.loading} sort={sort} onSortChange={setSort} infinite={{ hasMore: list.hasMore, loadingMore: list.loadingMore, onLoadMore: list.loadMore, total: list.total, error: list.error }} serverFilters filters={filters} onFiltersChange={onFiltersChange} filterFields={[
     {name:'assigned', label:'Route assignment', options:[{value:'assigned',label:'Assigned to route'},{value:'unassigned',label:'No route'}]},
     {name:'routeId', label:'All routes', options:routes.map(route => ({value: route.id, label: route.id}))}
-  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal students={studentRows} routes={routes} onClose={() => setBulkOpen(false)} onSave={onBulkAssign}/>}{importOpen && <ImportStudentsModal onClose={() => setImportOpen(false)} onImported={onImported}/>}</DataPage>;
+  ]}>{history && <HistoryModal {...history} onClose={closeHistory}/>}{bulkOpen && <BulkAssignModal routes={routes} onClose={() => setBulkOpen(false)} onSave={thenReload(onBulkAssign)}/>}{importOpen && <ImportStudentsModal onClose={() => setImportOpen(false)} onImported={thenReload(onImported)}/>}</DataPage>;
 }
 
 function FeeReport({ rows, students, onBack }) {
@@ -3305,13 +3368,12 @@ export default function AdminApp() {
     };
   }, [session?.token]);
 
-  // The bootstrap effect above already loads the unfiltered vehicles/routes/drivers/
-  // students. Skip each filter effect's very first run so login doesn't fire the
-  // same four requests twice; still refetch on every real filter change after that.
+  // The bootstrap effect above already loads the unfiltered vehicles/routes/drivers.
+  // Skip each filter effect's very first run so login doesn't fire the same
+  // requests twice; still refetch on every real filter change after that.
   const vehiclesFirstRun = useRef(true);
   const routesFirstRun = useRef(true);
   const driversFirstRun = useRef(true);
-  const studentsFirstRun = useRef(true);
 
   useEffect(() => {
     if (!session?.token) return;
@@ -3349,17 +3411,9 @@ export default function AdminApp() {
     return () => { activeRequest = false; };
   }, [driverFilters, session?.token]);
 
-  useEffect(() => {
-    if (!session?.token) return;
-    if (studentsFirstRun.current) { studentsFirstRun.current = false; return; }
-    let activeRequest = true;
-    setResourceLoading('students', true);
-    api.getStudents(studentFilters)
-      .then(rows => activeRequest && setStudents(rows))
-      .catch(error => activeRequest && setApiStatus({ loading: false, error: error.message || 'Unable to filter students.' }))
-      .finally(() => activeRequest && setResourceLoading('students', false));
-    return () => { activeRequest = false; };
-  }, [studentFilters, session?.token]);
+  // No student filter effect: the Students page loads its own filtered pages
+  // from the server as you scroll (see StudentsPage). `students` here stays the
+  // full, unfiltered list that the other screens depend on.
 
   const handleAddVehicle = async record => {
     // The vehicle form's driver field is read-only (assignment happens from the
@@ -3489,7 +3543,7 @@ export default function AdminApp() {
   if(active==='Routes') content=<RoutesPage routes={routes} vehicles={vehicles} filters={routeFilters} onFiltersChange={setRouteFilters} onAdd={handleAddRoute} onEdit={handleEditRoute} onDelete={handleDeleteRoute} loading={tableLoading.routes}/>;
   if(active==='Vehicles') content=<VehiclesPage vehicles={vehicles} routes={routes} filters={vehicleFilters} onFiltersChange={setVehicleFilters} onAdd={handleAddVehicle} onEdit={handleEditVehicle} loading={tableLoading.vehicles}/>;
   if(active==='Drivers') content=<DriversPage drivers={drivers} vehicles={vehicles} routes={routes} filters={driverFilters} onFiltersChange={setDriverFilters} onAdd={handleAddDriver} onEdit={handleEditDriver} loading={tableLoading.drivers}/>;
-  if(active==='Students') content=<StudentsPage students={students} routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} onImported={refreshCoreData} loading={tableLoading.students}/>;
+  if(active==='Students') content=<StudentsPage routes={routes} feeDues={feeDues} filters={studentFilters} onFiltersChange={setStudentFilters} onAdd={handleAddStudent} onEdit={handleEditStudent} onDelete={handleDeleteStudent} onRemind={handleRemindStudent} onBulkAssign={handleBulkAssignStudents} onImported={refreshCoreData}/>;
   if(active==='Fees & payments') content=<PaymentsPage payments={payments} students={students} feeDues={feeDues} onGenerateDues={handleGenerateDues} onRemindAll={handleRemindAllDues} onImported={refreshCoreData} onAdd={async record => { await api.createPayment(record); await refreshCoreData(); }} onEdit={async record => {
     // Only these four are correctable; the student and the due a receipt is
     // linked to are not, so a misassigned payment must be deleted and re-posted.
