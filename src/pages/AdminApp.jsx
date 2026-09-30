@@ -503,8 +503,10 @@ function ImportStudentsModal({ onClose, onImported }) {
 
     const totals = {
       dryRun: !commit, total: 0, valid: 0, created: 0, updated: 0,
-      routesAssigned: 0, rejected: [...duplicates], sample: []
+      routesAssigned: 0, slabsChanged: 0, rejected: [...duplicates], warnings: [], unknownRoutes: [], sample: []
     };
+    // Route codes the server could not find, summed across chunks.
+    const unknownRoutes = new Map();
 
     try {
       for (let i = 0; i < chunks.length; i++) {
@@ -515,7 +517,13 @@ function ImportStudentsModal({ onClose, onImported }) {
         totals.created += response.created ?? 0;
         totals.updated += response.updated ?? 0;
         totals.routesAssigned += response.routesAssigned ?? 0;
+        totals.slabsChanged += response.slabsChanged ?? 0;
         if (response.rejected?.length) totals.rejected.push(...response.rejected);
+        if (response.warnings?.length) totals.warnings.push(...response.warnings);
+        for (const { routeCode, rows: count } of response.unknownRoutes ?? []) {
+          unknownRoutes.set(routeCode, (unknownRoutes.get(routeCode) ?? 0) + count);
+        }
+        totals.unknownRoutes = [...unknownRoutes].map(([routeCode, count]) => ({ routeCode, rows: count }));
         if (totals.sample.length < 10 && response.sample?.length) {
           totals.sample.push(...response.sample.slice(0, 10 - totals.sample.length));
         }
@@ -523,6 +531,7 @@ function ImportStudentsModal({ onClose, onImported }) {
         setResult({ ...totals });
       }
       totals.rejected.sort((a, b) => a.rowNumber - b.rowNumber);
+      totals.warnings.sort((a, b) => a.rowNumber - b.rowNumber);
       setResult({ ...totals });
       if (commit) await onImported();
     } catch (err) {
@@ -539,13 +548,17 @@ function ImportStudentsModal({ onClose, onImported }) {
   };
 
   const rejected = result?.rejected ?? [];
+  const warnings = result?.warnings ?? [];
+  const unknownRoutes = result?.unknownRoutes ?? [];
+  // A dry run's counts are projections of what the import would do.
+  const verb = past => (result?.dryRun ? `to ${past === 'created' ? 'create' : 'update'}` : past);
 
   return <div className="record-modal-backdrop" onClick={onClose}>
     <div className="record-modal bulk-assign-modal" onClick={event => event.stopPropagation()}>
       <div className="modal-head">
         <div>
           <h2>Import students from sheet</h2>
-          <p>Upload the transport list as Excel (.xlsx) or CSV. Columns are read by position, so keep the original column order.</p>
+          <p>Upload the transport list as Excel (.xlsx) or CSV. Columns are read by position, so keep the original column order. Create routes and their distance slabs first — rows naming a route that does not exist are rejected.</p>
         </div>
         <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={16}/></button>
       </div>
@@ -579,18 +592,28 @@ function ImportStudentsModal({ onClose, onImported }) {
         {result && <div className="import-result">
           <div className="import-stats">
             <span><strong>{result.valid}</strong> valid</span>
-            <span><strong>{result.created}</strong> created</span>
-            <span><strong>{result.updated}</strong> updated</span>
-            <span><strong>{result.routesAssigned}</strong> routes</span>
+            <span><strong>{result.created}</strong> {verb('created')}</span>
+            <span><strong>{result.updated}</strong> {verb('updated')}</span>
+            <span><strong>{result.routesAssigned}</strong> route changes</span>
+            <span><strong>{result.slabsChanged}</strong> slab changes</span>
+            <span className={warnings.length ? 'import-warn' : ''}><strong>{warnings.length}</strong> fee warnings</span>
             <span className={rejected.length ? 'import-bad' : ''}><strong>{rejected.length}</strong> rejected</span>
           </div>
           {result.dryRun && <p className="import-note">Dry run — nothing was written yet.</p>}
 
+          {unknownRoutes.length > 0 && <div className="import-rejects">
+            <strong>Routes not found — create these on the Routes page, or fix the codes in column J</strong>
+            <ul>{unknownRoutes.map(route => <li key={route.routeCode}>
+              <b>{route.routeCode}</b> — {route.rows} row(s)
+            </li>)}</ul>
+          </div>}
+
           {result.sample?.length > 0 && <table className="import-table">
-            <thead><tr><th>Reg. No.</th><th>Name</th><th>Class</th><th>Guardian</th><th>Phone</th><th>Route</th></tr></thead>
+            <thead><tr><th>Reg. No.</th><th>Name</th><th>Class</th><th>Guardian</th><th>Phone</th><th>Route</th><th>Slab</th><th>Fee</th></tr></thead>
             <tbody>{result.sample.map(row => <tr key={row.registrationNumber}>
               <td>{row.registrationNumber}</td><td>{row.fullName}</td><td>{row.className}</td>
               <td>{dash(row.guardianName)}</td><td>{row.phone}</td><td>{dash(row.routeCode)}</td>
+              <td>{dash(row.slab)}</td><td>{row.fee == null ? '-' : formatCurrency(row.fee)}</td>
             </tr>)}</tbody>
           </table>}
 
@@ -601,12 +624,21 @@ function ImportStudentsModal({ onClose, onImported }) {
             </li>)}</ul>
             {rejected.length > 50 && <p className="import-note">…and {rejected.length - 50} more.</p>}
           </div>}
+
+          {warnings.length > 0 && <div className="import-warnings">
+            <strong>Fee warnings (these rows still import)</strong>
+            <ul>{warnings.slice(0, 50).map(warning => <li key={warning.rowNumber}>
+              <b>Row {warning.rowNumber}</b> — {warning.reason}<small>{warning.preview}</small>
+            </li>)}</ul>
+            {warnings.length > 50 && <p className="import-note">…and {warnings.length - 50} more.</p>}
+          </div>}
         </div>}
 
         <details className="import-columns">
           <summary>Expected column order</summary>
           <ol>{IMPORT_COLUMNS.map(column => <li key={column}>{column}</li>)}</ol>
           <p className="import-note">Repeated header rows inside the sheet are skipped automatically. Existing students are matched on registration number (column B) and updated, so re-importing is safe.</p>
+          <p className="import-note">Route No (J) must match an existing route. On a route with distance slabs, Slab KMS (K) picks the slab by its upper figure ("0-5 KM" is 5 km); if K is empty the student keeps their current slab on that route, or gets the route's only slab. Fees (M) is checked against that slab's fee, or the route's flat fee, and differences are listed as warnings.</p>
         </details>
       </div>
 
@@ -1454,7 +1486,7 @@ const vehicleFields = [
 ];
 const routeFields = [
   // Spaces are allowed: the transport sheet codes the pre-primary run on a route
-  // as "B-19 PRE", and student import creates routes straight from those values.
+  // as "B-19 PRE", and student import matches its route column against these codes.
   { name: 'id', label: 'Route code', required: true, placeholder: 'RT-01', pattern: '[A-Za-z0-9][A-Za-z0-9 -]*', minLength: 2, maxLength: 32, title: 'Start with a letter or number; letters, numbers, spaces, and hyphens only' },
   { name: 'name', label: 'Route name', required: true, minLength: 2, maxLength: 120 },
   { name: 'fee', label: 'Flat fee', type: 'number', required: true, min: '0', max: '99999999.99', step: '0.01', inputMode: 'decimal', hint: 'Charged per quarter. Used only when this route has no distance slabs.' },
