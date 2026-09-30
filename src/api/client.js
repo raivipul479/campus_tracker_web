@@ -237,9 +237,10 @@ export const api = {
   // every interpretation rule lives on the server. Defaults to a dry run.
   // rowOffset is the index of the first row within the original sheet, so
   // rejects reported from a later chunk still cite findable row numbers.
-  importStudents: (rows, commit = false, rowOffset = 0) => request('/students/import', {
+  // header is the sheet's header row, which the server reads the layout from.
+  importStudents: (rows, commit = false, rowOffset = 0, header = null) => request('/students/import', {
     method: 'POST',
-    body: JSON.stringify({ rows, commit, rowOffset })
+    body: JSON.stringify({ rows, commit, rowOffset, header })
   }),
   assignStudentsBulk: assignments => request('/assignments/students/bulk', {
     method: 'POST',

@@ -380,11 +380,19 @@ function parseCsv(text) {
 
 // Columns are positional, matching the transport sheet. Header names cannot be
 // used: the sheet has two "S NO." columns and two phone columns differing only
-// by case, so any name-based lookup collides and loses data.
-const IMPORT_COLUMNS = [
-  'A  S NO.', 'B  S NO. (registration)', "C  STUDENT'S NAME", 'D  CLASS', 'E  SEC.',
-  "F  FATHER'S/MOTHER'S NAME", 'G  ADDRESS', 'H  Phone Number', 'I  PHONE NUMBER',
-  'J  ROUTE NO', 'K  Slab KMS', 'L  1 PM DROP', 'M  FEES'
+// by case, so any name-based lookup collides and loses data. The server tells
+// the two layouts apart by "Route Name" at K in the header row.
+const IMPORT_LAYOUTS = [
+  { name: 'Transport list', columns: [
+    'A  S NO.', 'B  S NO. (registration)', "C  STUDENT'S NAME", 'D  CLASS', 'E  SEC.',
+    "F  FATHER'S/MOTHER'S NAME", 'G  ADDRESS', 'H  Phone Number', 'I  PHONE NUMBER',
+    'J  ROUTE NO', 'K  Slab KMS', 'L  1 PM DROP', 'M  FEES'
+  ] },
+  { name: 'Branch list', columns: [
+    'A  Sr.No.', 'B  Unique ID (registration)', 'C  Student Name', 'D  Class', 'E  Section',
+    'F  Father Name', 'G  Address', 'H  Phone Number', 'I  Secondry Contact no',
+    'J  Route No', 'K  Route Name', 'L  Slabe', 'M  PMDrop', 'N  Fees', 'O  Branch (JPS / JPIS)'
+  ] }
 ];
 
 // Reads the first worksheet of an .xlsx/.xls file into a 2D array of strings.
@@ -503,15 +511,21 @@ function ImportStudentsModal({ onClose, onImported }) {
 
     const totals = {
       dryRun: !commit, total: 0, valid: 0, created: 0, updated: 0,
-      routesAssigned: 0, slabsChanged: 0, rejected: [...duplicates], warnings: [], unknownRoutes: [], sample: []
+      routesAssigned: 0, slabsChanged: 0, rejected: [...duplicates], warnings: [], createdRoutes: [], createdSlabs: [], sample: []
     };
-    // Route codes the server could not find, summed across chunks.
-    const unknownRoutes = new Map();
+    // Only the first chunk holds the header row, and the server reads the
+    // sheet's layout from it, so it goes along with every chunk.
+    const header = rows.find(isSheetHeaderRow) ?? null;
+    // Routes and slabs the import creates, merged across chunks. A dry run
+    // reports a new route from every chunk that mentions it, and on commit a
+    // slab added by a later chunk belongs to a route an earlier chunk created.
+    const createdRoutes = new Map();
+    const createdSlabs = new Map();
 
     try {
       for (let i = 0; i < chunks.length; i++) {
         setProgress({ done: i, total: chunks.length });
-        const response = await api.importStudents(chunks[i].rows, commit, chunks[i].offset);
+        const response = await api.importStudents(chunks[i].rows, commit, chunks[i].offset, header);
         totals.total += response.total ?? 0;
         totals.valid += response.valid ?? 0;
         totals.created += response.created ?? 0;
@@ -520,10 +534,18 @@ function ImportStudentsModal({ onClose, onImported }) {
         totals.slabsChanged += response.slabsChanged ?? 0;
         if (response.rejected?.length) totals.rejected.push(...response.rejected);
         if (response.warnings?.length) totals.warnings.push(...response.warnings);
-        for (const { routeCode, rows: count } of response.unknownRoutes ?? []) {
-          unknownRoutes.set(routeCode, (unknownRoutes.get(routeCode) ?? 0) + count);
+        for (const route of response.createdRoutes ?? []) {
+          const known = createdRoutes.get(route.routeCode);
+          if (!known) createdRoutes.set(route.routeCode, { ...route, slabs: [...route.slabs] });
+          else for (const slab of route.slabs) if (!known.slabs.some(s => s.label === slab.label)) known.slabs.push(slab);
         }
-        totals.unknownRoutes = [...unknownRoutes].map(([routeCode, count]) => ({ routeCode, rows: count }));
+        for (const slab of response.createdSlabs ?? []) {
+          const route = createdRoutes.get(slab.routeCode);
+          if (route) { if (!route.slabs.some(s => s.label === slab.label)) route.slabs.push({ label: slab.label, fee: slab.fee }); }
+          else createdSlabs.set(`${slab.routeCode} ${slab.label}`, slab);
+        }
+        totals.createdRoutes = [...createdRoutes.values()];
+        totals.createdSlabs = [...createdSlabs.values()];
         if (totals.sample.length < 10 && response.sample?.length) {
           totals.sample.push(...response.sample.slice(0, 10 - totals.sample.length));
         }
@@ -549,7 +571,11 @@ function ImportStudentsModal({ onClose, onImported }) {
 
   const rejected = result?.rejected ?? [];
   const warnings = result?.warnings ?? [];
-  const unknownRoutes = result?.unknownRoutes ?? [];
+  const createdRoutes = result?.createdRoutes ?? [];
+  const createdSlabs = result?.createdSlabs ?? [];
+  const slabSummary = route => route.slabs.length
+    ? route.slabs.map(slab => `${slab.label} ${formatCurrency(slab.fee)}`).join(' · ')
+    : `flat fee ${formatCurrency(route.fee ?? 0)}`;
   // A dry run's counts are projections of what the import would do.
   const verb = past => (result?.dryRun ? `to ${past === 'created' ? 'create' : 'update'}` : past);
 
@@ -558,7 +584,7 @@ function ImportStudentsModal({ onClose, onImported }) {
       <div className="modal-head">
         <div>
           <h2>Import students from sheet</h2>
-          <p>Upload the transport list as Excel (.xlsx) or CSV. Columns are read by position, so keep the original column order. Create routes and their distance slabs first — rows naming a route that does not exist are rejected.</p>
+          <p>Upload the transport list as Excel (.xlsx) or CSV. Columns are read by position, so keep the original column order. Routes and distance slabs the sheet names but the system lacks are created from its Slab and Fees columns.</p>
         </div>
         <button type="button" className="icon-btn" onClick={onClose}><Icon name="close" size={16}/></button>
       </div>
@@ -601,11 +627,12 @@ function ImportStudentsModal({ onClose, onImported }) {
           </div>
           {result.dryRun && <p className="import-note">Dry run — nothing was written yet.</p>}
 
-          {unknownRoutes.length > 0 && <div className="import-rejects">
-            <strong>Routes not found — create these on the Routes page, or fix the codes in column J</strong>
-            <ul>{unknownRoutes.map(route => <li key={route.routeCode}>
-              <b>{route.routeCode}</b> — {route.rows} row(s)
-            </li>)}</ul>
+          {(createdRoutes.length > 0 || createdSlabs.length > 0) && <div className="import-created">
+            <strong>{result.dryRun ? 'Will be created' : 'Created'}: {createdRoutes.length} new route(s){createdSlabs.length > 0 && `, ${createdSlabs.length} slab(s) on existing routes`}. Check the codes and fees, then assign buses on the Routes page.</strong>
+            <ul>
+              {createdRoutes.map(route => <li key={route.routeCode}><b>{route.routeCode}</b> — {slabSummary(route)}</li>)}
+              {createdSlabs.map(slab => <li key={`${slab.routeCode} ${slab.label}`}><b>{slab.routeCode}</b> — new slab {slab.label} {formatCurrency(slab.fee)}</li>)}
+            </ul>
           </div>}
 
           {result.sample?.length > 0 && <table className="import-table">
@@ -636,9 +663,12 @@ function ImportStudentsModal({ onClose, onImported }) {
 
         <details className="import-columns">
           <summary>Expected column order</summary>
-          <ol>{IMPORT_COLUMNS.map(column => <li key={column}>{column}</li>)}</ol>
+          {IMPORT_LAYOUTS.map(layout => <div key={layout.name}>
+            <p className="import-note"><b>{layout.name}</b></p>
+            <ol>{layout.columns.map(column => <li key={column}>{column}</li>)}</ol>
+          </div>)}
           <p className="import-note">Repeated header rows inside the sheet are skipped automatically. Existing students are matched on registration number (column B) and updated, so re-importing is safe.</p>
-          <p className="import-note">Route No (J) must match an existing route. On a route with distance slabs, Slab KMS (K) picks the slab by its upper figure ("0-5 KM" is 5 km); if K is empty the student keeps their current slab on that route, or gets the route's only slab. Fees (M) is checked against that slab's fee, or the route's flat fee, and differences are listed as warnings.</p>
+          <p className="import-note">A Route No that does not exist yet is created. The slab column picks the slab by its upper figure ("0-5 KM" is 5 km); a band the route does not have yet is added as a slab, charging the most common Fees for that route and band. Routes priced by a flat fee are not given slabs. If the slab column is empty the student keeps their current slab on that route, or gets the route's only slab. Fees is checked against the slab's fee, or the route's flat fee, and differences are listed as warnings. Branch, when present, sets the student's branch.</p>
         </details>
       </div>
 
