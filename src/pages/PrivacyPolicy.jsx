@@ -1,6 +1,6 @@
 import React from 'react';
 import '../assets/global.css';
-import { AdimoveLogo } from '../components/AdimoveLogo.jsx';
+import { CONTACT, PublicIcon as PolicyIcon, PublicPage } from '../components/PublicPage.jsx';
 
 // Public page — deliberately rendered outside AdminApp's session gate (see
 // main.jsx). An app-store listing has to be able to reach this URL without
@@ -9,36 +9,9 @@ import { AdimoveLogo } from '../components/AdimoveLogo.jsx';
 // The sections describe what this system actually collects. They are not a
 // substitute for legal advice — have someone qualified review the wording.
 //
-// A phone number and postal address strengthen the policy but are optional;
-// leave them empty and the contact card simply omits the line rather than
-// printing a placeholder.
+// Contact details live in components/PublicPage.jsx, shared with /contact.
 
 const LAST_UPDATED = '30 August 2026';
-
-const CONTACT = {
-  organisation: 'Adimove',
-  email: 'raivipul479@gmail.com',
-  phone: '',
-  address: ''
-};
-
-const PolicyIcon = ({ name, size = 18 }) => {
-  const paths = {
-    student: <><path d="m2 9 10-5 10 5-10 5L2 9Z"/><path d="M6 11.5V16c3 3 9 3 12 0v-4.5M22 9v6"/></>,
-    phone: <><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></>,
-    driver: <><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></>,
-    pin: <><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></>,
-    clock: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
-    money: <><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h.01M6 9h4M6 15h6"/></>,
-    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></>,
-    shield: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></>,
-    mail: <><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></>,
-    arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>
-  };
-  return <svg className="policy-ic" width={size} height={size} viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
-    aria-hidden="true">{paths[name]}</svg>;
-};
 
 const COLLECTED = [
   { icon: 'student', title: 'Student details', text: 'Name, registration number, class and section, home address, and the distance band used to calculate fees.' },
@@ -182,69 +155,55 @@ const SECTIONS = [
 
 export default function PrivacyPolicy() {
   return (
-    <div className="policy-page">
-      <header className="policy-topbar">
-        <a className="policy-brand" href="/">
-          <span className="brand-mark"><AdimoveLogo size={22} title="Adimove"/></span>
-          <span>Adi<b>move</b></span>
-        </a>
-        <a className="policy-back" href="/">Back to dashboard <PolicyIcon name="arrow" size={15}/></a>
-      </header>
+    <PublicPage>
+      <div className="policy-hero">
+        <span className="policy-badge">Legal</span>
+        <h1>Privacy Policy</h1>
+        <p className="policy-meta">Last updated {LAST_UPDATED}</p>
+        <p className="policy-lede">
+          What personal information the Adimove school-transport system collects, why it is
+          collected, and who it is shared with. Covers both the administrator dashboard and the
+          parent and driver mobile app.
+        </p>
+      </div>
 
-      <main className="policy-shell">
-        <div className="policy-hero">
-          <span className="policy-badge">Legal</span>
-          <h1>Privacy Policy</h1>
-          <p className="policy-meta">Last updated {LAST_UPDATED}</p>
-          <p className="policy-lede">
-            What personal information the Adimove school-transport system collects, why it is
-            collected, and who it is shared with. Covers both the administrator dashboard and the
-            parent and driver mobile app.
-          </p>
-        </div>
-
-        <div className="policy-body">
-          <nav className="policy-toc" aria-label="On this page">
-            <p className="policy-toc-title">On this page</p>
-            <ol>
-              {SECTIONS.map(section => (
-                <li key={section.id}><a href={`#${section.id}`}>{section.title}</a></li>
-              ))}
-              <li><a href="#contact">Contact us</a></li>
-            </ol>
-          </nav>
-
-          <article className="policy-content">
-            {SECTIONS.map((section, index) => (
-              <section className="policy-section" id={section.id} key={section.id}>
-                <h2><span className="policy-num">{String(index + 1).padStart(2, '0')}</span>{section.title}</h2>
-                {section.body}
-              </section>
+      <div className="policy-body">
+        <nav className="policy-toc" aria-label="On this page">
+          <p className="policy-toc-title">On this page</p>
+          <ol>
+            {SECTIONS.map(section => (
+              <li key={section.id}><a href={`#${section.id}`}>{section.title}</a></li>
             ))}
+            <li><a href="#contact">Contact us</a></li>
+          </ol>
+        </nav>
 
-            <section className="policy-section" id="contact">
-              <h2><span className="policy-num">{String(SECTIONS.length + 1).padStart(2, '0')}</span>Contact us</h2>
-              <p>Questions about this policy, or about the information we hold:</p>
-              <div className="policy-contact-card">
-                <span className="policy-tile-ic"><PolicyIcon name="mail" size={20}/></span>
-                <div>
-                  <strong>{CONTACT.organisation}</strong>
-                  <p>
-                    <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>
-                    {CONTACT.phone && <><br/>{CONTACT.phone}</>}
-                    {CONTACT.address && <><br/>{CONTACT.address}</>}
-                  </p>
-                </div>
-              </div>
+        <article className="policy-content">
+          {SECTIONS.map((section, index) => (
+            <section className="policy-section" id={section.id} key={section.id}>
+              <h2><span className="policy-num">{String(index + 1).padStart(2, '0')}</span>{section.title}</h2>
+              {section.body}
             </section>
-          </article>
-        </div>
-      </main>
+          ))}
 
-      <footer className="policy-foot">
-        <span>&copy; {new Date().getFullYear()} {CONTACT.organisation}</span>
-        <a href="/">Adimove dashboard</a>
-      </footer>
-    </div>
+          <section className="policy-section" id="contact">
+            <h2><span className="policy-num">{String(SECTIONS.length + 1).padStart(2, '0')}</span>Contact us</h2>
+            <p>Questions about this policy, or about the information we hold:</p>
+            <div className="policy-contact-card">
+              <span className="policy-tile-ic"><PolicyIcon name="mail" size={20}/></span>
+              <div>
+                <strong>{CONTACT.organisation}</strong>
+                <p>
+                  <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>
+                  {CONTACT.phone && <><br/>{CONTACT.phone}</>}
+                  {CONTACT.address && <><br/>{CONTACT.address}</>}
+                </p>
+              </div>
+            </div>
+            <p>For anything else, see our <a href="/contact">contact page</a>.</p>
+          </section>
+        </article>
+      </div>
+    </PublicPage>
   );
 }

@@ -3328,6 +3328,19 @@ function SettingsPage() {
           View privacy policy
         </a>
       </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginTop: 20 }}>
+        <div>
+          <strong>Contact us</strong>
+          <p style={{ margin: '4px 0 0', color: 'var(--muted, #6b7280)' }}>
+            Public support page for parents, drivers and schools — use it as the app's support URL.
+          </p>
+        </div>
+        <a className="filter-btn report-open-btn" href="/contact" target="_blank" rel="noopener noreferrer">
+          <Icon name="file" size={16}/>
+          View contact page
+        </a>
+      </div>
     </div>
   </section>;
 }
@@ -3362,7 +3375,7 @@ function SuperAdminLogin({ onLogin }) {
       </form>
       {import.meta.env.DEV && <small className="login-hint">Local dev default: admin@campus.local / Admin@12345 (unless overridden by SUPER_ADMIN_EMAIL/SUPER_ADMIN_PASSWORD). Never shown in production builds.</small>}
       {/* Plain anchor, not a state change: /privacy renders outside this gate. */}
-      <small className="login-hint"><a href="/privacy">Privacy policy</a></small>
+      <small className="login-hint"><a href="/privacy">Privacy policy</a> · <a href="/contact">Contact us</a></small>
     </section>
   </main>;
 }
