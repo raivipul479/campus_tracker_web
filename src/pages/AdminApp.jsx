@@ -3039,7 +3039,9 @@ function TrackingPage({ vehicles }) {
       from: new Date(Date.now() - trailHours * 3600 * 1000).toISOString(),
       limit: 1000
     })
-      .then(data => { if (active) setTrail(data?.positions || []); })
+      // roadPath is the same trip snapped to the streets; raw positions are the
+      // fallback when the backend could not snap it.
+      .then(data => { if (active) setTrail(data?.roadPath?.length ? data.roadPath : data?.positions || []); })
       // A missing trail must not break the live map: the bus position is the
       // point of this screen, the trail is context.
       .catch(() => { if (active) setTrail([]); });
