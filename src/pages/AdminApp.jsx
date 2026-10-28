@@ -43,6 +43,41 @@ const busMarkerIcon = L.divIcon({
   popupAnchor: [0, -18]
 });
 
+// A bus that is running pulses, so it reads as live at a glance.
+const busMarkerMovingIcon = L.divIcon({
+  className: 'leaflet-bus-marker is-moving',
+  html: '<span>Bus</span>',
+  iconSize: [42, 42],
+  iconAnchor: [21, 21],
+  popupAnchor: [0, -18]
+});
+
+// A play triangle for where the trip began, a square for where it stopped.
+const ROUTE_PIN_GLYPH = {
+  start: '<path d="M4 2.5 L11 7 L4 11.5 Z" fill="#fff"/>',
+  stop: '<rect x="3" y="3" width="8" height="8" rx="1" fill="#fff"/>'
+};
+
+const routePinIcon = kind => L.divIcon({
+  className: `route-pin ${kind}`,
+  html: `<svg width="14" height="14" viewBox="0 0 14 14">${ROUTE_PIN_GLYPH[kind]}</svg>`,
+  iconSize: [26, 26],
+  iconAnchor: [13, 13]
+});
+
+const routeStartIcon = routePinIcon('start');
+const routeStopIcon = routePinIcon('stop');
+
+// Where the drawn trip begins and ends. Null when the bus has barely moved, so
+// the two pins would sit on top of each other and say nothing.
+function routeEndpoints(trail) {
+  if (trail.length < 2) return null;
+  const start = trail[0];
+  const stop = trail[trail.length - 1];
+  if (distanceMeters(start, stop) < 30) return null;
+  return { start, stop };
+}
+
 const Icon = ({ name, size = 19 }) => {
   const paths = {
     grid: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -893,15 +928,21 @@ function routeArrowIcon(bearing) {
   });
 }
 
-function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail = [] }) {
+// Covers the map while a newly selected bus's route loads, so the previous
+// bus's map is never shown under the new bus's name.
+const MapLoading = () => <div className="map-loading" role="status"><span className="spinner"/>Loading route...</div>;
+
+function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail = [], loading = false }) {
   if (!points.length) {
     return <div className="google-map-fallback"><MiniMap vehicles={fallbackVehicles} expanded/><div className="map-warning"><Icon name="clock" size={17}/><span>Waiting for GPS vehicle data...</span></div></div>;
   }
 
   const selectedPoint = points.find(point => point.id === selectedVehicleId || point.vehicleNo === selectedVehicleId) || points[0];
   const center = [selectedPoint.latitude, selectedPoint.longitude];
+  const endpoints = routeEndpoints(trail);
 
   return <div className="google-map-shell">
+    {loading && <MapLoading/>}
     <MapContainer center={center} zoom={13} className="google-map-canvas" scrollWheelZoom>
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -917,7 +958,13 @@ function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail 
         icon={routeArrowIcon(arrow.bearing)}
         interactive={false}
         keyboard={false}/>)}
-      <Marker key={selectedPoint.id} position={[selectedPoint.latitude, selectedPoint.longitude]} icon={busMarkerIcon}>
+      {endpoints && <Marker position={[endpoints.start.latitude, endpoints.start.longitude]} icon={routeStartIcon}>
+        <Popup>Start of route</Popup>
+      </Marker>}
+      {endpoints && <Marker position={[endpoints.stop.latitude, endpoints.stop.longitude]} icon={routeStopIcon}>
+        <Popup>Stop</Popup>
+      </Marker>}
+      <Marker key={selectedPoint.id} position={[selectedPoint.latitude, selectedPoint.longitude]} icon={selectedPoint.ignition ? busMarkerMovingIcon : busMarkerIcon} zIndexOffset={1000}>
         <Popup>
           <div className="map-popup">
             <strong>{vehicleLabel(selectedPoint)}</strong>
@@ -936,7 +983,7 @@ function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail 
 function googleBusIcon(maps, moving) {
   const fill = moving ? '#15966d' : '#718096';
   const glow = moving ? '#34d399' : '#f59e0b';
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="70" height="70" viewBox="0 0 70 70"><defs><filter id="busGlow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><circle cx="35" cy="35" r="27" fill="${glow}" opacity=".22"><animate attributeName="r" values="22;31;22" dur="1.8s" repeatCount="indefinite"/><animate attributeName="opacity" values=".34;.1;.34" dur="1.8s" repeatCount="indefinite"/></circle><circle cx="35" cy="35" r="24" fill="${fill}" stroke="#fff" stroke-width="4" filter="url(#busGlow)"/><path d="M24 39V26c0-4 4-6 11-6s11 2 11 6v13" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M25 30h20M27 39h16" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="29" cy="44" r="3" fill="#fff"/><circle cx="41" cy="44" r="3" fill="#fff"/><path d="M29 50v-3M41 50v-3" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="70" height="70" viewBox="0 0 70 70"><defs><filter id="busGlow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><circle cx="35" cy="35" r="27" fill="${glow}" opacity=".22"/><circle cx="35" cy="35" r="24" fill="${fill}" stroke="#fff" stroke-width="4" filter="url(#busGlow)"/><path d="M24 39V26c0-4 4-6 11-6s11 2 11 6v13" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M25 30h20M27 39h16" stroke="#fff" stroke-width="3" stroke-linecap="round"/><circle cx="29" cy="44" r="3" fill="#fff"/><circle cx="41" cy="44" r="3" fill="#fff"/><path d="M29 50v-3M41 50v-3" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>`;
   return {
     url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
     scaledSize: new maps.Size(70, 70),
@@ -944,10 +991,50 @@ function googleBusIcon(maps, moving) {
   };
 }
 
-function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail = [] }) {
+function googleRoutePinIcon(maps, kind) {
+  const fill = kind === 'start' ? '#15966d' : '#d32f2f';
+  const glyph = ROUTE_PIN_GLYPH[kind];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="11" fill="${fill}" stroke="#fff" stroke-width="3"/><g transform="translate(6 6)">${glyph}</g></svg>`;
+  return {
+    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    scaledSize: new maps.Size(26, 26),
+    anchor: new maps.Point(13, 13)
+  };
+}
+
+// A pulse under the bus marker, drawn as a DOM element on the map's own overlay
+// layer. CSS animates it reliably, which an animated SVG inside a marker icon
+// does not on every browser.
+function createBusGlow(maps, position) {
+  class BusGlow extends maps.OverlayView {
+    onAdd() {
+      this.element = document.createElement('div');
+      this.element.className = 'bus-glow';
+      this.getPanes().overlayLayer.appendChild(this.element);
+    }
+
+    draw() {
+      const projection = this.getProjection();
+      if (!projection || !this.element) return;
+      const pixel = projection.fromLatLngToDivPixel(new maps.LatLng(position.lat, position.lng));
+      if (!pixel) return;
+      this.element.style.left = `${pixel.x}px`;
+      this.element.style.top = `${pixel.y}px`;
+    }
+
+    onRemove() {
+      this.element?.remove();
+      this.element = null;
+    }
+  }
+  return new BusGlow();
+}
+
+function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail = [], loading = false }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
+  const glowRef = useRef(null);
   const trailRef = useRef(null);
   const infoWindowRef = useRef(null);
   const [mapError, setMapError] = useState('');
@@ -988,6 +1075,8 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
 
         markersRef.current.forEach(marker => marker.setMap(null));
         markersRef.current = [];
+        if (glowRef.current) glowRef.current.setMap(null);
+        glowRef.current = null;
 
         // Where this bus has been, drawn behind the live marker so the current
         // position still reads as the current position.
@@ -1016,11 +1105,31 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
           });
         }
 
+        // Where the trip began and where it stopped, under the bus marker.
+        const endpoints = routeEndpoints(trail);
+        if (endpoints) {
+          [['start', endpoints.start, 'Start of route'], ['stop', endpoints.stop, 'Stop']].forEach(([kind, point, title]) => {
+            markersRef.current.push(new maps.Marker({
+              map: mapInstanceRef.current,
+              position: { lat: point.latitude, lng: point.longitude },
+              title,
+              icon: googleRoutePinIcon(maps, kind),
+              zIndex: 5
+            }));
+          });
+        }
+
+        if (selectedPoint.ignition) {
+          glowRef.current = createBusGlow(maps, center);
+          glowRef.current.setMap(mapInstanceRef.current);
+        }
+
         const marker = new maps.Marker({
           map: mapInstanceRef.current,
           position: center,
           title: vehicleLabel(selectedPoint),
-          icon: googleBusIcon(maps, selectedPoint.ignition)
+          icon: googleBusIcon(maps, selectedPoint.ignition),
+          zIndex: 10
         });
 
         marker.addListener('click', () => {
@@ -1063,16 +1172,17 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
   }, [selectedPoint, trail]);
 
   return <div className="google-map-shell">
+    {loading && <MapLoading/>}
     {mapError && <div className="map-warning map-warning-top"><Icon name="alert" size={17}/><span>{mapError}</span></div>}
     <div ref={mapRef} className="google-map-canvas"/>
   </div>;
 }
 
-function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId, trail }) {
+function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId, trail, loading }) {
   if (GOOGLE_MAPS_API_KEY) {
-    return <VehicleGoogleMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail}/>;
+    return <VehicleGoogleMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail} loading={loading}/>;
   }
-  return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail}/>;
+  return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail} loading={loading}/>;
 }
 
 // Buses are known by their fleet code (BUS-01), not the registration plate.
@@ -2945,7 +3055,9 @@ const TRAIL_WINDOWS = [
 function TrackingPage({ vehicles }) {
   const [showHistory, setShowHistory] = useState(false);
   const [trailHours, setTrailHours] = useState(6);
-  const [trail, setTrail] = useState([]);
+  // The trail is stored with the bus and window it was fetched for, so a
+  // different bus never draws the previous bus's route while its own loads.
+  const [trailData, setTrailData] = useState({ key: '', points: [] });
   const [gpsPoints, setGpsPoints] = useState([]);
   const [gpsStatus, setGpsStatus] = useState({ loading: true, error: '', local: false, ageMs: 0, stale: false });
   const [selectedId, setSelectedId] = useState('');
@@ -3029,11 +3141,14 @@ function TrackingPage({ vehicles }) {
   // moving. reportedAt changes exactly when the backend stores a new position
   // for this bus, and stays put while it is parked, so nothing is refetched
   // without something new to draw.
+  const trailRequestKey = trailKey && trailHours ? `${trailKey}|${trailHours}` : '';
+  const trail = trailData.key === trailRequestKey ? trailData.points : [];
+  // True only until the first fetch for this bus and window lands. A refresh
+  // of the same bus keeps drawing the trail it has, with no loader flicker.
+  const trailLoading = Boolean(trailRequestKey) && trailData.key !== trailRequestKey;
+
   useEffect(() => {
-    if (!trailKey || !trailHours) {
-      setTrail([]);
-      return;
-    }
+    if (!trailRequestKey) return undefined;
     let active = true;
     api.getGpsVehicleHistory(trailKey, {
       from: new Date(Date.now() - trailHours * 3600 * 1000).toISOString(),
@@ -3041,12 +3156,14 @@ function TrackingPage({ vehicles }) {
     })
       // roadPath is the same trip snapped to the streets; raw positions are the
       // fallback when the backend could not snap it.
-      .then(data => { if (active) setTrail(data?.roadPath?.length ? data.roadPath : data?.positions || []); })
+      .then(data => {
+        if (active) setTrailData({ key: trailRequestKey, points: data?.roadPath?.length ? data.roadPath : data?.positions || [] });
+      })
       // A missing trail must not break the live map: the bus position is the
-      // point of this screen, the trail is context.
-      .catch(() => { if (active) setTrail([]); });
+      // point of this screen, the trail is context. It still ends the loader.
+      .catch(() => { if (active) setTrailData({ key: trailRequestKey, points: [] }); });
     return () => { active = false; };
-  }, [trailKey, trailHours, selected?.reportedAt]);
+  }, [trailRequestKey, selected?.reportedAt]);
 
   if (showHistory) {
     return <section className="fee-report-screen">
@@ -3077,7 +3194,7 @@ function TrackingPage({ vehicles }) {
         </div>
       </div>
       {gpsStatus.error && <div className="gps-error"><Icon name="alert" size={17}/><span>{gpsStatus.error}</span></div>}
-      <VehicleLiveMap points={gpsPoints} fallbackVehicles={vehicles} selectedVehicleId={selected?.id || selected?.vehicleNo} trail={trail}/>
+      <VehicleLiveMap points={gpsPoints} fallbackVehicles={vehicles} selectedVehicleId={selected?.id || selected?.vehicleNo} trail={trail} loading={trailLoading}/>
     </div>
     <div className="panel tracking-list">
       <div className="panel-head"><div><h2>Active vehicles</h2><p>{liveVehicles.filter(v => v.status !== 'Offline').length} of {liveVehicles.length} online</p></div></div>

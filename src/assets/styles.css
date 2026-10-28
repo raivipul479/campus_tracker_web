@@ -299,3 +299,23 @@ a.contact-card:hover{border-color:#bfe4d3;box-shadow:0 6px 20px rgba(18,60,50,.0
 .load-more{min-height:1px;display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;color:#7f8998}
 .load-more:not(:empty){padding:14px 0}
 .modal-actions .bulk-assign-changes{margin-right:auto;align-self:center;font-size:12px;color:#6b7686}
+
+/* Live map: loader that hides the previous bus's map while a new one loads */
+.map-loading{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#eef2f2;color:#4b5a6b;font-size:13px;font-weight:600}
+.map-loading .spinner{width:30px;height:30px;border-width:3px}
+
+/* Running bus: a soft pulse that radiates from the marker */
+@keyframes busPulse{0%{box-shadow:0 0 0 0 rgba(52,211,153,.65),0 4px 12px #27364b45}100%{box-shadow:0 0 0 22px rgba(52,211,153,0),0 4px 12px #27364b45}}
+.leaflet-bus-marker.is-moving{animation:busPulse 1.6s ease-out infinite}
+.bus-glow{position:absolute;width:0;height:0;pointer-events:none}
+.bus-glow::before,.bus-glow::after{content:"";position:absolute;left:-24px;top:-24px;width:48px;height:48px;border-radius:50%;background:rgba(52,211,153,.35);animation:busGlow 1.8s ease-out infinite}
+.bus-glow::after{animation-delay:.9s}
+@keyframes busGlow{0%{transform:scale(.7);opacity:.9}100%{transform:scale(2.4);opacity:0}}
+
+/* Start / stop pins on the route */
+.route-pin{width:26px!important;height:26px!important;margin:0!important;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 8px #27364b66;display:grid;place-items:center}
+.route-pin svg{display:block}
+.route-pin.start{background:#15966d}
+.route-pin.stop{background:#d32f2f}
+
+@media (prefers-reduced-motion:reduce){.leaflet-bus-marker.is-moving,.bus-glow::before,.bus-glow::after{animation:none}}
