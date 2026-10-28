@@ -857,18 +857,34 @@ function MiniMap({ vehicles, expanded = false }) {
   </div>;
 }
 
-function VehicleMapBounds({ points }) {
+// Chooses the zoom once per bus and window; after that a new position only
+// moves the map to the bus and leaves the zoom where the user has it.
+function VehicleMapBounds({ trail, latitude, longitude, viewKey }) {
   const map = useMap();
+  const viewRef = useRef({ key: null, fitted: false, ready: false, follow: true });
+
+  // Once the user drags the map away, stop pulling it back to the bus.
+  useEffect(() => {
+    const stopFollowing = () => { viewRef.current.follow = false; };
+    map.on('dragstart', stopFollowing);
+    return () => { map.off('dragstart', stopFollowing); };
+  }, [map]);
 
   useEffect(() => {
-    if (!points.length) return;
-    const bounds = L.latLngBounds(points.map(point => [point.latitude, point.longitude]));
-    if (points.length === 1) {
-      map.setView(bounds.getCenter(), 15);
-    } else {
-      map.fitBounds(bounds, { padding: [60, 60] });
+    const view = viewRef.current;
+    if (view.key !== viewKey) Object.assign(view, { key: viewKey, fitted: false, ready: false, follow: true });
+    const center = [latitude, longitude];
+    if (trail.length > 1 && !view.fitted) {
+      map.fitBounds(L.latLngBounds([...trail.map(point => [point.latitude, point.longitude]), center]), { padding: [60, 60] });
+      view.fitted = true;
+      view.ready = true;
+    } else if (!view.ready) {
+      map.setView(center, 15);
+      view.ready = true;
+    } else if (view.follow) {
+      map.panTo(center);
     }
-  }, [map, points]);
+  }, [map, trail, latitude, longitude, viewKey]);
 
   return null;
 }
@@ -932,7 +948,7 @@ function routeArrowIcon(bearing) {
 // bus's map is never shown under the new bus's name.
 const MapLoading = () => <div className="map-loading" role="status"><span className="spinner"/>Loading route...</div>;
 
-function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail = [], loading = false }) {
+function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail = [], loading = false, viewKey = '' }) {
   if (!points.length) {
     return <div className="google-map-fallback"><MiniMap vehicles={fallbackVehicles} expanded/><div className="map-warning"><Icon name="clock" size={17}/><span>Waiting for GPS vehicle data...</span></div></div>;
   }
@@ -948,7 +964,7 @@ function VehicleLeafletMap({ points, fallbackVehicles, selectedVehicleId, trail 
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      <VehicleMapBounds points={trail.length > 1 ? [...trail, selectedPoint] : [selectedPoint]}/>
+      <VehicleMapBounds trail={trail} latitude={selectedPoint.latitude} longitude={selectedPoint.longitude} viewKey={viewKey}/>
       {trail.length > 1 && <Polyline
         positions={trail.map(point => [point.latitude, point.longitude])}
         pathOptions={{ color: '#34b27b', weight: 4, opacity: 0.85 }}/>}
@@ -1030,8 +1046,11 @@ function createBusGlow(maps, position) {
   return new BusGlow();
 }
 
-function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail = [], loading = false }) {
+function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail = [], loading = false, viewKey = '' }) {
   const mapRef = useRef(null);
+  // Which bus and window the camera was last set up for, and whether it should
+  // still follow the bus (until the user drags the map).
+  const viewRef = useRef({ key: null, fitted: false, ready: false, follow: true });
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
   const glowRef = useRef(null);
@@ -1071,6 +1090,8 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
             ]
           });
           infoWindowRef.current = new maps.InfoWindow();
+          // Once the user drags the map away, stop pulling it back to the bus.
+          mapInstanceRef.current.addListener('dragstart', () => { viewRef.current.follow = false; });
         }
 
         markersRef.current.forEach(marker => marker.setMap(null));
@@ -1151,16 +1172,26 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
         });
         markersRef.current.push(marker);
 
-        if (trail.length > 1) {
+        // Choose the zoom once per bus and window. Every later update (a new
+        // position, a refreshed trail) only moves the map to the new location
+        // and leaves the zoom where the user has it.
+        const view = viewRef.current;
+        if (view.key !== viewKey) Object.assign(view, { key: viewKey, fitted: false, ready: false, follow: true });
+        if (trail.length > 1 && !view.fitted) {
           // Fit the route rather than centring on the bus, otherwise most of
           // where it has been sits off-screen.
           const bounds = new maps.LatLngBounds();
           trail.forEach(point => bounds.extend({ lat: point.latitude, lng: point.longitude }));
           bounds.extend(center);
           mapInstanceRef.current.fitBounds(bounds, 48);
-        } else {
+          view.fitted = true;
+          view.ready = true;
+        } else if (!view.ready) {
           mapInstanceRef.current.setCenter(center);
           mapInstanceRef.current.setZoom(15);
+          view.ready = true;
+        } else if (view.follow) {
+          mapInstanceRef.current.panTo(center);
         }
         setMapError('');
       })
@@ -1169,7 +1200,7 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
     return () => {
       cancelled = true;
     };
-  }, [selectedPoint, trail]);
+  }, [selectedPoint, trail, viewKey]);
 
   return <div className="google-map-shell">
     {loading && <MapLoading/>}
@@ -1178,11 +1209,11 @@ function VehicleGoogleMap({ points, fallbackVehicles, selectedVehicleId, trail =
   </div>;
 }
 
-function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId, trail, loading }) {
+function VehicleLiveMap({ points, fallbackVehicles, selectedVehicleId, trail, loading, viewKey }) {
   if (GOOGLE_MAPS_API_KEY) {
-    return <VehicleGoogleMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail} loading={loading}/>;
+    return <VehicleGoogleMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail} loading={loading} viewKey={viewKey}/>;
   }
-  return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail} loading={loading}/>;
+  return <VehicleLeafletMap points={points} fallbackVehicles={fallbackVehicles} selectedVehicleId={selectedVehicleId} trail={trail} loading={loading} viewKey={viewKey}/>;
 }
 
 // Buses are known by their fleet code (BUS-01), not the registration plate.
@@ -3194,7 +3225,7 @@ function TrackingPage({ vehicles }) {
         </div>
       </div>
       {gpsStatus.error && <div className="gps-error"><Icon name="alert" size={17}/><span>{gpsStatus.error}</span></div>}
-      <VehicleLiveMap points={gpsPoints} fallbackVehicles={vehicles} selectedVehicleId={selected?.id || selected?.vehicleNo} trail={trail} loading={trailLoading}/>
+      <VehicleLiveMap points={gpsPoints} fallbackVehicles={vehicles} selectedVehicleId={selected?.id || selected?.vehicleNo} trail={trail} loading={trailLoading} viewKey={`${selected?.id || selected?.vehicleNo}|${trailHours}`}/>
     </div>
     <div className="panel tracking-list">
       <div className="panel-head"><div><h2>Active vehicles</h2><p>{liveVehicles.filter(v => v.status !== 'Offline').length} of {liveVehicles.length} online</p></div></div>
